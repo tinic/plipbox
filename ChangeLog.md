@@ -1,6 +1,19 @@
 plipbox: ChangeLog
 ==================
 
+fork release 0.6-multicast (2026-09-23)
+---------------------------------------
+
+- selective Ethernet multicast receive support in the firmware and SANA-II
+  driver, including the joins needed for IPv6 neighbour discovery
+- GCC 16.2.1 driver build and AVR-GCC 16.1 firmware build, both with LTO
+- Nano/ATmega328P firmware and 68000-compatible driver binaries; use them as
+  a pair for IPv6 multicast
+- live IPv4 and IPv6 transfers verified on an A3000 with a Nano-class board
+
+This is a fork release, not an upstream 0.7 release. See the GitHub release
+notes for compatibility, flashing precautions, and test scope.
+
 version 0.1 (22.7.2012)
 -----------------------
 

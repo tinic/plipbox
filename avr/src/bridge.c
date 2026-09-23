@@ -89,7 +89,7 @@ static void magic_online(const u08 *buf)
 
   /* Each online session starts without memberships. The Amiga driver
    * replays its joined groups after the online handshake when needed. */
-  pio_mcast_filter(empty_hash);
+  pio_mcast_filter(empty_hash, 0);
 
   // validate mac address and if it does not match then reconfigure PIO
   const u08 *src_mac = eth_get_src_mac(buf);
@@ -106,8 +106,10 @@ static void magic_online(const u08 *buf)
 
 static void magic_offline(void)
 {
+  static const u08 empty_hash[8] = {0};
   uart_send_time_stamp_spc();
   uart_send_pstring(PSTR("[MAGIC] offline\r\n"));
+  pio_mcast_filter(empty_hash, 0);
   /* A queued Ethernet frame may have pulsed ACK before the Amiga took the
    * unit down. Do not carry that unacknowledged request into the next online
    * session: it otherwise suppresses the new session's first request. */
@@ -128,13 +130,16 @@ static void magic_mcast_filter(const u08 *buf, u16 size)
   /* Control packets come only from the parallel port. Requiring the configured
    * source MAC, exact length and complemented copy rejects common parallel
    * bit errors instead of turning the receive filter into an arbitrary mask. */
-  if(size != ETH_HDR_SIZE + 16 ||
+  if(size != ETH_HDR_SIZE + 18 ||
      !net_compare_mac(eth_get_src_mac(buf), param.mac_addr))
     return;
   for(i = 0; i < 8; ++i)
     if((u08)(buf[ETH_HDR_SIZE + i] ^ buf[ETH_HDR_SIZE + 8 + i]) != 0xff)
       return;
-  pio_mcast_filter(buf + ETH_HDR_SIZE);
+  if((u08)(buf[ETH_HDR_SIZE + 16] ^ buf[ETH_HDR_SIZE + 17]) != 0xff ||
+     buf[ETH_HDR_SIZE + 16] > 1)
+    return;
+  pio_mcast_filter(buf + ETH_HDR_SIZE, buf[ETH_HDR_SIZE + 16]);
 }
 
 static void request_magic(void)

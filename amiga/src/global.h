@@ -118,7 +118,7 @@ struct PLIPBase
                                pb_Lock;
 
    volatile UBYTE              pb_Flags;                       /* see below */
-   UBYTE                       pb_pad2;
+   UBYTE                       pb_Promiscuous;                /* exclusive opener */
    volatile UWORD              pb_ExtFlags;                    /* see below */
    UBYTE                       pb_CfgAddr[HW_ADDRFIELDSIZE];
    UBYTE                       pb_DefAddr[HW_ADDRFIELDSIZE];

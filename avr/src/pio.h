@@ -59,6 +59,6 @@ extern u08 pio_recv(u08 *buf, u16 max_size, u16 *got_size);
 extern u08 pio_has_recv(void);
 extern u08 pio_status(u08 status_id, u08 *value);
 extern u08 pio_control(u08 control_id, u08 value);
-extern u08 pio_mcast_filter(const u08 hash[8]);
+extern u08 pio_mcast_filter(const u08 hash[8], u08 promiscuous);
 
 #endif

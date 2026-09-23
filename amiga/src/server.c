@@ -149,7 +149,7 @@ PRIVATE REGARGS BOOL goonline(BASEPTR)
       {
          /* A new firmware session starts with an empty hash. Avoid a second
           * back-to-back parallel transfer when no group has been joined. */
-         if (pb->pb_MCastList.lh_Head->ln_Succ != NULL &&
+         if ((pb->pb_Promiscuous || pb->pb_MCastList.lh_Head->ln_Succ != NULL) &&
              !hw_replay_mcast_filter(pb)) {
             hw_detach(pb);
             return FALSE;
@@ -359,6 +359,8 @@ PRIVATE REGARGS BOOL read_frame(struct IOSana2Req *req, struct HWFrame *frame)
    }
    if(broadcast) {
       req->ios2_Req.io_Flags |= SANA2IOF_BCAST;
+   } else if (frame->hwf_DstAddr[0] & 1) {
+      req->ios2_Req.io_Flags |= SANA2IOF_MCAST;
    }
    
    /* store packet type */

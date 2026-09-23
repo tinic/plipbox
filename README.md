@@ -24,7 +24,7 @@ toolchain with the HUNK LTO plugin fixes (tested with package revision 16.2.1);
 older HUNK linkers can silently omit LTO code. The build treats linker warnings
 as errors. It keeps LTO and `LTO=0` objects and outputs separate. Clean before
 each build. The
-68000 LTO driver measured 9,296 bytes versus 10,124 bytes without LTO on
+68000 LTO driver measured 9,464 bytes versus 10,312 bytes without LTO on
 this source revision; a live A3000 test passed IPv4 and IPv6 with the LTO
 image. This is a modest code-size saving, not a measured performance gain.
 
@@ -37,9 +37,9 @@ From `avr/src`, run `make clean` before each build,
 then `make BOARD=nano AVR_TOOLCHAIN=/path/to/avr-gcc-16.1.0-x64-linux`.
 The compiler/linker bundle and its matching headers are selected together by
 `AVR_TOOLCHAIN`. Firmware output names carry `-lto` when LTO is enabled.
-With this source revision, the Nano image is 12,565 bytes of flash with LTO
-versus 14,533 without; static SRAM use is 1,789 versus 1,806 bytes. The
-ATmega328P still has only 259 bytes beyond static allocation for the stack,
+With this source revision, the Nano image is 12,629 bytes of flash with LTO
+versus 14,597 without; static SRAM use is 1,798 versus 1,815 bytes. The
+ATmega328P still has only 250 bytes beyond static allocation for the stack,
 so a build-size check alone is not a firmware stability test.
 
 plipbox is an Arduino-based device that allows to connect low-end classic
@@ -79,11 +79,15 @@ want to play around with it.
 Download Releases
 -----------------
 
-See my [plipbox blog page][4] for downloads of the current release archives.
-These archives contain pre-built firmware and Amiga driver binaries in addtion
-to the source code here.
+The [fork releases][5] contain paired multicast-capable firmware and Amiga
+driver binaries. Use the firmware variant for your board; the first fork
+release provides the tested Nano/ATmega328P variant. The original 0.6
+archives remain available from the [plipbox blog page][4], but their firmware
+does not enable this fork's IPv6 multicast reception. See the release notes
+before flashing or replacing an installed driver.
 
 [4]: http://lallafa.de/blog/amiga-projects/plipbox/
+[5]: https://github.com/tinic/plipbox/releases
 
 Documentation
 -------------

@@ -119,7 +119,7 @@ static BOOL hw_send_mcast_hash(struct PLIPBase *pb, const UBYTE hash[8])
    UBYTE *data = (UBYTE *)(frame + 1);
    UWORD i;
 
-   frame->hwf_Size = HW_ETH_HDR_SIZE + 16;
+   frame->hwf_Size = HW_ETH_HDR_SIZE + 18;
    memset(frame->hwf_DstAddr, 0, HW_ADDRFIELDSIZE);
    memcpy(frame->hwf_SrcAddr, pb->pb_CfgAddr, HW_ADDRFIELDSIZE);
    frame->hwf_Type = HW_MAGIC_MCAST_FILTER;
@@ -127,6 +127,8 @@ static BOOL hw_send_mcast_hash(struct PLIPBase *pb, const UBYTE hash[8])
       data[i] = hash[i];
       data[8 + i] = (UBYTE)~hash[i];
    }
+   data[16] = pb->pb_Promiscuous ? 1 : 0;
+   data[17] = (UBYTE)~data[16];
    return hw_send_frame(pb, frame);
 }
 
