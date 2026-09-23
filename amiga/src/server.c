@@ -32,6 +32,73 @@ PRIVATE REGARGS VOID dowritereqs(BASEPTR);
 PRIVATE REGARGS VOID doreadreqs(BASEPTR);
 PRIVATE REGARGS VOID dos2reqs(BASEPTR);
 
+/* The server owns the list and the parallel-port transfer. */
+PRIVATE REGARGS VOID change_mcast(BASEPTR, struct IOSana2Req *ios2, BOOL add)
+{
+   struct MCastRec *mr;
+   BOOL online = !(pb->pb_Flags & PLIPF_OFFLINE);
+   UBYTE *addr = ios2->ios2_SrcAddr;
+
+   ios2->ios2_Req.io_Error = 0;
+   ios2->ios2_WireError = 0;
+
+   if (!(addr[0] & 1) ||
+       memcmp(addr, "\xff\xff\xff\xff\xff\xff", HW_ADDRFIELDSIZE) == 0) {
+      ios2->ios2_Req.io_Error = S2ERR_BAD_ADDRESS;
+      ios2->ios2_WireError = S2WERR_BAD_MULTICAST;
+      return;
+   }
+
+   for (mr = (struct MCastRec *)pb->pb_MCastList.lh_Head;
+        mr->mr_Link.mln_Succ != NULL;
+        mr = (struct MCastRec *)mr->mr_Link.mln_Succ)
+      if (memcmp(mr->mr_Addr, addr, HW_ADDRFIELDSIZE) == 0)
+         break;
+
+   if (mr->mr_Link.mln_Succ == NULL) mr = NULL;
+
+   if (add) {
+      if (mr != NULL) {
+         if (mr->mr_Refs == 0xffffffffUL)
+            ios2->ios2_Req.io_Error = S2ERR_NO_RESOURCES;
+         else
+            ++mr->mr_Refs;
+         return;
+      }
+      mr = (struct MCastRec *)AllocVec(sizeof(*mr), MEMF_CLEAR | MEMF_ANY);
+      if (mr == NULL) {
+         ios2->ios2_Req.io_Error = S2ERR_NO_RESOURCES;
+         return;
+      }
+      memcpy(mr->mr_Addr, addr, HW_ADDRFIELDSIZE);
+      mr->mr_Refs = 1;
+      AddTail((struct List *)&pb->pb_MCastList, (struct Node *)mr);
+      if (online && !hw_replay_mcast_filter(pb)) {
+         Remove((struct Node *)mr);
+         FreeVec(mr);
+         ios2->ios2_Req.io_Error = S2ERR_TX_FAILURE;
+         ios2->ios2_WireError = S2WERR_GENERIC_ERROR;
+      }
+   } else {
+      if (mr == NULL) {
+         ios2->ios2_Req.io_Error = S2ERR_BAD_STATE;
+         return;
+      }
+      if (mr->mr_Refs > 1) {
+         --mr->mr_Refs;
+         return;
+      }
+      Remove((struct Node *)mr);
+      if (online && !hw_replay_mcast_filter(pb)) {
+         AddTail((struct List *)&pb->pb_MCastList, (struct Node *)mr);
+         ios2->ios2_Req.io_Error = S2ERR_TX_FAILURE;
+         ios2->ios2_WireError = S2WERR_GENERIC_ERROR;
+      } else {
+         FreeVec(mr);
+      }
+   }
+}
+
    /*
    ** functions to go online/offline
    */
@@ -77,11 +144,17 @@ PRIVATE REGARGS BOOL goonline(BASEPTR)
    {
       if (!hw_attach(pb))
       {
+         hw_detach(pb);
          d(("error going online\n"));
          rc = FALSE;
       }
       else
       {
+         if ((pb->pb_Promiscuous || pb->pb_MCastList.lh_Head->ln_Succ != NULL) &&
+             !hw_replay_mcast_filter(pb)) {
+            hw_detach(pb);
+            return FALSE;
+         }
          hw_get_sys_time(pb, &pb->pb_DevStats.LastStart);
          pb->pb_Flags &= ~PLIPF_OFFLINE;
          DoEvent(pb, S2EVENT_ONLINE);
@@ -287,6 +360,8 @@ PRIVATE REGARGS BOOL read_frame(struct IOSana2Req *req, struct HWFrame *frame)
    }
    if(broadcast) {
       req->ios2_Req.io_Flags |= SANA2IOF_BCAST;
+   } else if (frame->hwf_DstAddr[0] & 1) {
+      req->ios2_Req.io_Flags |= SANA2IOF_MCAST;
    }
    
    /* store packet type */
@@ -408,12 +483,6 @@ PRIVATE REGARGS VOID dos2reqs(BASEPTR)
    */
    while(ios2 = (struct IOSana2Req *)GetMsg(pb->pb_ServerPort))
    {
-      if (hw_recv_pending(pb))
-      {
-         d(("incoming data!"));
-         break;
-      }
-
       d(("sana2req %ld from serverport\n", ios2->ios2_Req.io_Command));
 
       switch (ios2->ios2_Req.io_Command)
@@ -446,6 +515,14 @@ PRIVATE REGARGS VOID dos2reqs(BASEPTR)
                ios2->ios2_Req.io_Error = S2ERR_NO_RESOURCES;
                ios2->ios2_WireError = S2WERR_GENERIC_ERROR;
             }
+         break;
+
+         case S2_ADDMULTICASTADDRESS:
+            change_mcast(pb, ios2, TRUE);
+         break;
+
+         case S2_DELMULTICASTADDRESS:
+            change_mcast(pb, ios2, FALSE);
          break;
       }
 
@@ -574,11 +651,15 @@ PRIVATE BOOL init(BASEPTR)
 PRIVATE VOID cleanup(BASEPTR)
 {
    struct BufferManagement *bm;
+   struct MCastRec *mr;
 
    gooffline(pb);
 
    while(bm = (struct BufferManagement *)RemHead((struct List *)&pb->pb_BufferManagement))
       FreeVec(bm);
+
+   while((mr = (struct MCastRec *)RemHead((struct List *)&pb->pb_MCastList)) != NULL)
+      FreeVec(mr);
 
    if (pb->pb_Frame) FreeVec(pb->pb_Frame);
 
@@ -637,7 +718,8 @@ PUBLIC VOID SAVEDS ServerTask(void)
                d2(("**> wait\n"));
                recv = Wait(wmask);
                d2(("**> wait: got 0x%08lx\n", recv));
-            }
+            } else
+               recv = SetSignal(0, wmask) & wmask;
 
             /* accept pending receive and start reading */
             if (hw_recv_pending(pb))
@@ -683,4 +765,3 @@ PUBLIC VOID SAVEDS ServerTask(void)
    else
       d(("no startup packet\n"));
 }
-

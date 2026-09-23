@@ -30,6 +30,7 @@
 #define HW_MAGIC_ONLINE    0xffff
 #define HW_MAGIC_OFFLINE   0xfffe
 #define HW_MAGIC_LOOPBACK  0xfffd
+#define HW_MAGIC_MCAST_FILTER 0xfffc
 
 /* externs in asm code */
 GLOBAL VOID ASM interrupt(REG(a1,struct HWBase *hwb));
@@ -80,6 +81,54 @@ static REGARGS BOOL hw_send_magic_pkt(struct PLIPBase *pb, USHORT magic)
    
    rc = hw_send_frame(pb, frame) ? TRUE : FALSE;
    return rc;
+}
+
+/* ENC28J60 destination hash: bits 28:23 of the non-reflected CRC. */
+static UBYTE mcast_bucket(const UBYTE addr[HW_ADDRFIELDSIZE])
+{
+   ULONG crc = 0xffffffffUL;
+   UWORD i, bit;
+
+   for (i = 0; i < HW_ADDRFIELDSIZE; ++i)
+      for (bit = 0; bit < 8; ++bit)
+         crc = (((crc >> 31) ^ (addr[i] >> bit)) & 1)
+                  ? (crc << 1) ^ 0x04c11db7UL : crc << 1;
+
+   return (UBYTE)((crc >> 23) & 63);
+}
+
+static BOOL hw_send_mcast_hash(struct PLIPBase *pb, const UBYTE hash[8])
+{
+   struct HWFrame *frame = pb->pb_Frame;
+   UBYTE *data = (UBYTE *)(frame + 1);
+   UWORD i;
+
+   frame->hwf_Size = HW_ETH_HDR_SIZE + 18;
+   memset(frame->hwf_DstAddr, 0, HW_ADDRFIELDSIZE);
+   memcpy(frame->hwf_SrcAddr, pb->pb_CfgAddr, HW_ADDRFIELDSIZE);
+   frame->hwf_Type = HW_MAGIC_MCAST_FILTER;
+   for (i = 0; i < 8; ++i) {
+      data[i] = hash[i];
+      data[8 + i] = (UBYTE)~hash[i];
+   }
+   data[16] = pb->pb_Promiscuous ? 1 : 0;
+   data[17] = (UBYTE)~data[16];
+   return hw_send_frame(pb, frame);
+}
+
+GLOBAL REGARGS BOOL hw_replay_mcast_filter(struct PLIPBase *pb)
+{
+   UBYTE hash[8] = {0};
+   struct MCastRec *mr;
+
+   for (mr = (struct MCastRec *)pb->pb_MCastList.lh_Head;
+        mr->mr_Link.mln_Succ != NULL;
+        mr = (struct MCastRec *)mr->mr_Link.mln_Succ) {
+      UBYTE bucket = mcast_bucket(mr->mr_Addr);
+      hash[bucket >> 3] |= (UBYTE)(1U << (bucket & 7));
+   }
+
+   return hw_send_mcast_hash(pb, hash);
 }
 
 GLOBAL REGARGS void hw_get_sys_time(struct PLIPBase *pb, struct timeval *time)
@@ -323,7 +372,8 @@ GLOBAL REGARGS VOID hw_detach(struct PLIPBase *pb)
    struct HWBase *hwb = (struct HWBase *)pb->pb_HWBase;
    
    /* first tell mcu to go offline */
-   hw_send_magic_pkt(pb, HW_MAGIC_OFFLINE);
+   if (hwb->hwb_AllocFlags & 4)
+      hw_send_magic_pkt(pb, HW_MAGIC_OFFLINE);
 
    if (hwb->hwb_AllocFlags & 4)
    {
@@ -435,6 +485,12 @@ GLOBAL REGARGS BOOL hw_recv_frame(struct PLIPBase *pb, struct HWFrame *frame)
          break;
       }
 
+      if(frame->hwf_Size < HW_ETH_HDR_SIZE ||
+         frame->hwf_Size > hwb->hwb_MaxFrameSize) {
+         rc = FALSE;
+         break;
+      }
+
       /* perform internal loop back of magic packets of type 0xfffd */
       pkttyp = frame->hwf_Type;
       if(pkttyp == HW_MAGIC_LOOPBACK) {
@@ -445,6 +501,8 @@ GLOBAL REGARGS BOOL hw_recv_frame(struct PLIPBase *pb, struct HWFrame *frame)
       else if(pkttyp == HW_MAGIC_ONLINE) {
          d(("request online magic"));
          rc = hw_send_magic_pkt(pb, HW_MAGIC_ONLINE);
+         if (rc && (pb->pb_Promiscuous || pb->pb_MCastList.lh_Head->ln_Succ != NULL))
+            rc = hw_replay_mcast_filter(pb);
       }
       else {
          break;

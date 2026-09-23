@@ -10,6 +10,7 @@
 #include <hardware/cia.h>
 #include <dos/dostags.h>
 #include <resources/misc.h>
+#include <exec/errors.h>
 #include <exec/memory.h>
 
 #include <string.h>
@@ -80,6 +81,7 @@ PUBLIC ASM SAVEDS struct Device *DevInit(REG(d0,BASEPTR), REG(a0,BPTR seglist), 
    NewList((struct List*)&pb->pb_EventList);
    NewList((struct List*)&pb->pb_ReadOrphanList);
    NewList((struct List*)&pb->pb_TrackList);
+   NewList((struct List*)&pb->pb_MCastList);
    NewList((struct List*)&pb->pb_BufferManagement);
 
       /* initialise the access protection semaphores */
@@ -133,13 +135,19 @@ PUBLIC ASM SAVEDS LONG DevOpen(REG(a1,struct IOSana2Req *ios2), REG(d0,ULONG uni
 
    d(("entered\n"));
 
+   if (ios2->ios2_Req.io_Message.mn_Length < sizeof(struct IOSana2Req)) {
+      ios2->ios2_Req.io_Error = IOERR_BADLENGTH;
+      ios2->ios2_Req.io_Unit = NULL;
+      ios2->ios2_Req.io_Device = NULL;
+      return IOERR_BADLENGTH;
+   }
+
    /* Make sure our open remains single-threaded. */
    ObtainSemaphore(&pb->pb_Lock);
 
    pb->pb_DevNode.lib_OpenCnt++;
 
-   /* not promiscouos mode and unit valid ? */
-   if (!(flags & SANA2OPF_PROM) && (unit == 0))
+   if (unit == 0)
    {
       /* Allow access only if NOT:
       **
@@ -150,25 +158,17 @@ PUBLIC ASM SAVEDS LONG DevOpen(REG(a1,struct IOSana2Req *ios2), REG(d0,ULONG uni
       */
 
       if (!((pb->pb_DevNode.lib_OpenCnt > 1) &&
-            ((flags & SANA2OPF_MINE)
+            ((flags & (SANA2OPF_MINE | SANA2OPF_PROM))
           || (pb->pb_Flags & PLIPF_EXCLUSIVE)
           || (unit != pb->pb_Unit))))
       {
-         if (flags & SANA2OPF_MINE)
-            pb->pb_Flags |= PLIPF_EXCLUSIVE;
-         else
-            pb->pb_Flags &= ~PLIPF_EXCLUSIVE;
-         
          /*
          ** 13.05.96: Detlef Wuerkner <TetiSoft@apg.lahn.de>
          ** Rememer unit of 1st OpenDevice()
          */
-         if (pb->pb_DevNode.lib_OpenCnt == 1)
-            pb->pb_Unit = unit;
-
-         /* setup default mac */
-         {
+         if (pb->pb_DevNode.lib_OpenCnt == 1) {
             unsigned char addr[6] = { 0x1a,0x11,0xaf,0xa0,0x47,0x11};
+            pb->pb_Unit = unit;
             memcpy(pb->pb_CfgAddr, addr, HW_ADDRFIELDSIZE);
             memcpy(pb->pb_DefAddr, addr, HW_ADDRFIELDSIZE);
          }
@@ -234,6 +234,13 @@ PUBLIC ASM SAVEDS LONG DevOpen(REG(a1,struct IOSana2Req *ios2), REG(d0,ULONG uni
                FreeVec(bm);
             else
             {
+               if (pb->pb_DevNode.lib_OpenCnt == 1) {
+                  if (flags & (SANA2OPF_MINE | SANA2OPF_PROM))
+                     pb->pb_Flags |= PLIPF_EXCLUSIVE;
+                  else
+                     pb->pb_Flags &= ~PLIPF_EXCLUSIVE;
+                  pb->pb_Promiscuous = (flags & SANA2OPF_PROM) != 0;
+               }
                /* enqueue buffer management into list
                */
                AddTail((struct List *)&pb->pb_BufferManagement,(struct Node *)bm);
@@ -292,6 +299,10 @@ PUBLIC ASM SAVEDS BPTR DevClose(REG(a1,struct IOSana2Req *ior), REG(a6,BASEPTR))
       }
 
    pb->pb_DevNode.lib_OpenCnt--;
+
+   /* Do not let the next opener inherit a promiscuous filter. */
+   if (pb->pb_DevNode.lib_OpenCnt == 0 && pb->pb_Promiscuous)
+      pb->pb_DevNode.lib_Flags |= LIBF_DELEXP;
 
    ReleaseSemaphore(&pb->pb_Lock);
 
@@ -434,9 +445,18 @@ PUBLIC ASM SAVEDS VOID DevBeginIO(REG(a1,struct IOSana2Req *ios2), REG(a6,BASEPT
          }
       break;
 
+      case S2_MULTICAST:
+         if (!(ios2->ios2_DstAddr[0] & 1) ||
+             memcmp(ios2->ios2_DstAddr, "\xff\xff\xff\xff\xff\xff", HW_ADDRFIELDSIZE) == 0) {
+            ios2->ios2_Req.io_Error = S2ERR_BAD_ADDRESS;
+            ios2->ios2_WireError = S2WERR_BAD_MULTICAST;
+            break;
+         }
+         /* fall through: Ethernet transmits multicast like unicast. */
       case S2_BROADCAST:
+         if (ios2->ios2_Req.io_Command == S2_BROADCAST)
               /* set broadcast addr: ff:ff:ff:ff:ff:ff */
-         memset(ios2->ios2_DstAddr, 0xff, HW_ADDRFIELDSIZE);
+            memset(ios2->ios2_DstAddr, 0xff, HW_ADDRFIELDSIZE);
               /* fall through */
       case CMD_WRITE:
               /* determine max valid size */
@@ -473,6 +493,8 @@ PUBLIC ASM SAVEDS VOID DevBeginIO(REG(a1,struct IOSana2Req *ios2), REG(a6,BASEPT
       case S2_ONLINE:
       case S2_OFFLINE:
       case S2_CONFIGINTERFACE:   /* forward request */
+      case S2_ADDMULTICASTADDRESS:
+      case S2_DELMULTICASTADDRESS:
          DevForwardIO(pb, ios2);
          ios2 = NULL;
       break;
@@ -612,9 +634,6 @@ PUBLIC ASM SAVEDS VOID DevBeginIO(REG(a1,struct IOSana2Req *ios2), REG(a6,BASEPT
       break;
 
          /* other commands (SANA-2) we don't support */
-      /*case S2_ADDMULTICASTADDRESS:*/
-      /*case S2_DELMULTICASTADDRESS:*/
-      /*case S2_MULTICAST:*/
       default:
          ios2->ios2_Req.io_Error = S2ERR_NOT_SUPPORTED;
          ios2->ios2_WireError = S2WERR_GENERIC_ERROR;
@@ -669,4 +688,3 @@ extern void __restore_a4(void)
     __asm volatile("\tlea ___a4_init, a4");
 }
 #endif
-

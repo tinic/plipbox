@@ -27,11 +27,18 @@
  
 OS=$(shell uname -s)
 
-# install dir of avr libc (here MacPorts location)
+# Set AVR_TOOLCHAIN to the root of a self-contained AVR toolchain.
+AVR_TOOLCHAIN ?=
+ifneq ($(strip $(AVR_TOOLCHAIN)),)
+TOOLBIN = $(AVR_TOOLCHAIN)/bin/
+AVRLIBC_DIR = $(AVR_TOOLCHAIN)/avr
+else
+# install dir of avr libc for a system toolchain
 ifeq "$(OS)" "Darwin"
 AVRLIBC_DIR = /opt/local/avr
 else
 AVRLIBC_DIR = /usr/lib/avr
+endif
 endif
 
 ALL_BOARDS= arduino avrnetio nano
@@ -41,6 +48,13 @@ DIST_BOARDS= arduino avrnetio nano
 BOARD ?= nano
 DEBUG ?= 1
 DEV_ENC28J60 ?= 1
+LTO ?= 1
+
+ifneq ($(LTO),0)
+ifneq ($(LTO),1)
+$(error LTO must be 0 or 1)
+endif
+endif
 
 ifeq "$(BOARD)" "arduino"
 
@@ -131,7 +145,7 @@ include ../../version.mk
 BUILD_DATE = $(shell date '+%Y%m%d')
 
 # basename of output
-BASENAME = $(PROJECT)-$(VERSION)-$(UART_BAUD)-$(BOARD)-$(MCU)
+BASENAME = $(PROJECT)-$(VERSION)-$(UART_BAUD)-$(BOARD)-$(MCU)$(if $(filter 1,$(LTO)),-lto,)
 # project
 OUTPUT = $(OUTDIR)/$(BASENAME)
 # dist dir
@@ -177,9 +191,15 @@ CFLAGS += -Os
 CFLAGS += -Wall -Werror -Wstrict-prototypes
 CFLAGS += -I$(AVRLIBC_DIR)/include
 CFLAGS += -mmcu=$(MCU) -I. -Ibase -Ieth
+ifeq ($(LTO),1)
+CFLAGS += -flto -fuse-linker-plugin
+endif
  
-CFLAGS_LOCAL = -Wa,-adhlns=$(OBJDIR)/$(notdir $(<:%.c=%.lst))
-CFLAGS_LOCAL += -Wp,-M,-MP,-MT,$(OBJDIR)/$(*F).o,-MF,$(DEPDIR)/$(@F:.o=.d)
+CFLAGS_LOCAL = -Wp,-M,-MP,-MT,$(OBJDIR)/$(*F).o,-MF,$(DEPDIR)/$(@F:.o=.d)
+ifeq ($(LTO),0)
+# Per-object assembler listings conflict at LTO's single final assembler run.
+CFLAGS_LOCAL += -Wa,-adhlns=$(OBJDIR)/$(notdir $(<:%.c=%.lst))
+endif
 CFLAGS_LOCAL += -DVERSION_MIN="$(VERSION_MIN)" -DVERSION_MAJ="$(VERSION_MAJ)"
 CFLAGS_LOCAL += -DVERSION="\"$(VERSION)\"" -DBUILD_DATE="\"$(BUILD_DATE)\""
 CFLAGS_LOCAL += -DHAVE_$(BOARD) -DUART_BAUD=$(UART_BAUD) -DBOARD=$(BOARD)
@@ -187,21 +207,24 @@ CFLAGS_LOCAL += -DF_CPU=$(F_CPU)
 CFLAGS_LOCAL += $(patsubst %,-D%,$(DEFINES))
 
 # linker switches
-LDFLAGS = -Wl,-Map=$(OUTPUT).map,--cref
+LDFLAGS = -Wl,-Map=$(OUTPUT).map,--cref,--fatal-warnings
 LDFLAGS += -lm -lc
+ifeq ($(LTO),1)
+LDFLAGS += -flto -fuse-linker-plugin
+endif
 
 # Define programs and commands.
 SHELL = sh
-CC = avr-gcc
-OBJCOPY = avr-objcopy
-OBJDUMP = avr-objdump
-SIZE = avr-size
-NM = avr-nm
+CC = $(TOOLBIN)avr-gcc
+OBJCOPY = $(TOOLBIN)avr-objcopy
+OBJDUMP = $(TOOLBIN)avr-objdump
+SIZE = $(TOOLBIN)avr-size
+NM = $(TOOLBIN)avr-nm
 AVRDUDE = avrdude
 REMOVE = rm -f
 COPY = cp
-RANLIB = avr-ranlib
-AR = avr-ar
+RANLIB = $(TOOLBIN)avr-ranlib
+AR = $(TOOLBIN)avr-ar
 
 # define V to see compile output
 ifdef V
@@ -220,6 +243,7 @@ help:
 	@echo "  supported boards: $(ALL_BOARDS)"
 	@echo
 	@echo "build [BOARD=<board>]"
+	@echo "      LTO=1 (default) or LTO=0"
 	@echo "prog [BOARD=<board>]"
 	@echo "clean"
 
@@ -229,7 +253,7 @@ dirs:
 	@if [ ! -d $(DEPDIR) ]; then mkdir -p $(DEPDIR); fi
 	@if [ ! -d $(OUTDIR) ]; then mkdir -p $(OUTDIR); fi
 
-build: dirs hdr hex lss size
+build: dirs hdr hex lss size timing
 
 hdr:
 	@echo "--- building BOARD=$(BOARD) F_CPU=$(F_CPU) MCU=$(MCU) FLASH_MCU=$(FLASH_MCU) ---"
@@ -237,7 +261,7 @@ hdr:
 
 elf: $(OUTPUT).elf $(OUTPUT).lss $(OUTPUT).sym
 	@echo "  --- resulting elf ---"
-	$(HIDE)$(SIZE) $(OUTPUT).elf -C --mcu=$(MCU)
+	$(HIDE)$(SIZE) -B $(OUTPUT).elf
 
 hex: $(OUTPUT).hex
 
@@ -246,7 +270,8 @@ lss: $(OUTPUT).lss
 size: size_code size_data
 
 size_code: $(OUTPUT).elf
-	@SIZE=`$(SIZE) -C $(OUTPUT).elf | grep Program | awk '{ print $$2 }'` ; \
+	@SIZE=`$(SIZE) -B $(OUTPUT).elf | awk 'NR == 2 { print $$1 + $$2 }'` ; \
+	if [ -z "$$SIZE" ]; then echo "  size check failed"; exit 1; fi ; \
 	if [ $$SIZE -gt $(MAX_SIZE) ] ; then \
 		echo "  $$SIZE >  $(MAX_SIZE) bytes: code TOO LARGE" ; exit 1 ; \
 	else \
@@ -254,11 +279,22 @@ size_code: $(OUTPUT).elf
 	fi
 
 size_data: $(OUTPUT).elf
-	@SIZE=`$(SIZE) -C $(OUTPUT).elf | fgrep Data | awk '{ print $$2 }'` ; \
+	@SIZE=`$(SIZE) -B $(OUTPUT).elf | awk 'NR == 2 { print $$2 + $$3 }'` ; \
+	if [ -z "$$SIZE" ]; then echo "  size check failed"; exit 1; fi ; \
 	if [ $$SIZE -gt $(MAX_SRAM) ] ; then \
 		echo "  $$SIZE >  $(MAX_SRAM) bytes: sram TOO LARGE" ; exit 1 ; \
 	else \
 		echo "  $$SIZE <= $(MAX_SRAM) bytes: sram ok" ; \
+	fi
+
+# Burst transfers have cycle-sensitive handshakes.  An avr-gcc update once
+# outlined these pin helpers despite `static inline`, corrupting both RX and
+# TX without a protocol error.  Keep the executable, not the C syntax, gated.
+timing: $(OUTPUT).elf
+	@if $(NM) $(OUTPUT).elf | grep -Eq ' [tT] par_low_(data_in|data_out|get_pout|get_select|set_busy_lo|set_busy_hi)$$'; then \
+		echo '  timing check failed: parallel pin helper was outlined'; exit 1; \
+	else \
+		echo '  timing check ok: parallel pin helpers are inlined'; \
 	fi
 
 size_symbols: $(OUTPUT).elf
@@ -323,7 +359,7 @@ $(OBJDIR)/%.o : %.c
 -include $(shell mkdir -p $(DEPDIR) 2>/dev/null) $(wildcard $(DEPDIR)/*.d)
 
 .PRECIOUS: $(OBJ)
-.PHONY: all dirs elf hex prog clean avrlib clean.edit hdr size_code size_data size
+.PHONY: all dirs elf hex prog clean avrlib clean.edit hdr size_code size_data size timing
 
 # ----- AVRdude --------------------------------------------------------------
 

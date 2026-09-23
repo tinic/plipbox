@@ -29,6 +29,7 @@
 
 #include <avr/pgmspace.h>
 #include "global.h"
+#include "pio.h"
 
 /* function pointers */
 typedef u08  (*pio_dev_init_t)(const u08 mac[6],u08 flags);
@@ -38,6 +39,7 @@ typedef u08  (*pio_dev_recv_t)(u08 *buf, u16 max_size, u16 *got_size);
 typedef u08  (*pio_dev_has_recv_t)(void);
 typedef u08  (*pio_dev_status_t)(u08 status_id, u08 *value);
 typedef u08  (*pio_dev_control_t)(u08 control_id, u08 value);
+typedef u08  (*pio_dev_mcast_filter_t)(const u08 hash[8], u08 promiscuous);
 
 /* device structure */
 typedef struct {
@@ -49,6 +51,7 @@ typedef struct {
   pio_dev_has_recv_t  has_recv_f;
   pio_dev_status_t    status_f;
   pio_dev_control_t   control_f;
+  pio_dev_mcast_filter_t mcast_filter_f;
 } pio_dev_t;
 
 typedef const pio_dev_t *pio_dev_ptr_t;
@@ -100,6 +103,13 @@ static inline u08 pio_dev_control(pio_dev_ptr_t pd, u08 control_id, u08 value)
 {
   pio_dev_control_t control_f = (pio_dev_control_t)pgm_read_word(&pd->control_f);
   return control_f(control_id, value);
+}
+
+static inline u08 pio_dev_mcast_filter(pio_dev_ptr_t pd, const u08 hash[8], u08 promiscuous)
+{
+  pio_dev_mcast_filter_t filter_f =
+    (pio_dev_mcast_filter_t)pgm_read_word(&pd->mcast_filter_f);
+  return filter_f ? filter_f(hash, promiscuous) : PIO_NOT_FOUND;
 }
 
 #endif

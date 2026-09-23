@@ -324,16 +324,17 @@ static void writePhy (uint8_t address, uint16_t data) {
 
 // ---------- init ----------
 
-// Functions to enable/disable broadcast filter bits
-// With the bit set, broadcast packets are filtered.
-static inline void enc28j60_enable_broadcast ( void ) 
-{
-  writeRegByte(ERXFCON, ERXFCON_UCEN|ERXFCON_CRCEN/*|ERXFCON_PMEN*/|ERXFCON_BCEN);
-}
+static u08 normal_rx_filter;
 
-static inline void enc28j60_disable_broadcast ( void ) 
+static u08 enc28j60_mcast_filter(const u08 hash[8], u08 promiscuous)
 {
-  writeRegByte(ERXFCON, ERXFCON_UCEN|ERXFCON_CRCEN/*|ERXFCON_PMEN*/);
+  u08 i;
+  for (i = 0; i < 8; ++i)
+    writeRegByte(EHT0 + i, hash[i]);
+  /* Microchip specifies clearing ERXFCON for promiscuous receive. The
+   * receive status vector still lets the caller reject damaged frames. */
+  writeRegByte(ERXFCON, promiscuous ? 0 : normal_rx_filter);
+  return PIO_OK;
 }
 
 static u08 enc28j60_init(const u08 macaddr[6], u08 flags)
@@ -365,10 +366,14 @@ static u08 enc28j60_init(const u08 macaddr[6], u08 flags)
   writeReg(ETXND, TXSTOP_INIT);
   
   // set packet filter
-  if(flags & PIO_INIT_BROAD_CAST) {
-    enc28j60_enable_broadcast(); // change to add ERXFCON_BCEN recommended by epam
-  } else {
-    enc28j60_disable_broadcast(); // change to add ERXFCON_BCEN recommended by epam      
+  /* HTEN admits only MACs selected by the SANA-II join table. MCEN would
+   * admit all LAN multicast and overwhelm the parallel link. */
+  normal_rx_filter = ERXFCON_UCEN|ERXFCON_CRCEN|ERXFCON_HTEN;
+  if(flags & PIO_INIT_BROAD_CAST)
+    normal_rx_filter |= ERXFCON_BCEN;
+  {
+    static const u08 empty_hash[8] = {0};
+    enc28j60_mcast_filter(empty_hash, 0);
   }
 
   // BIST pattern generator?
@@ -686,5 +691,6 @@ const pio_dev_t PROGMEM pio_dev_enc28j60 = {
   .recv_f = enc28j60_recv,
   .has_recv_f = enc28j60_has_recv,
   .status_f = enc28j60_status,
-  .control_f = enc28j60_control
+  .control_f = enc28j60_control,
+  .mcast_filter_f = enc28j60_mcast_filter
 };

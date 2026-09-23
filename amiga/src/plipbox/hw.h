@@ -36,6 +36,7 @@ GLOBAL REGARGS VOID hw_detach(struct PLIPBase *pb);
 GLOBAL REGARGS void hw_get_sys_time(struct PLIPBase *pb, struct timeval *time);
 
 GLOBAL REGARGS BOOL hw_send_frame(struct PLIPBase *pb, struct HWFrame *frame);
+GLOBAL REGARGS BOOL hw_replay_mcast_filter(struct PLIPBase *pb);
 
 GLOBAL REGARGS ULONG hw_recv_sigmask(struct PLIPBase *pb);
 GLOBAL REGARGS BOOL hw_recv_pending(struct PLIPBase *pb);

@@ -297,30 +297,29 @@ static u08 cmd_send_burst(u16 *ret_size)
   for(i=0;i<words;i++) {
     // wait REQ == 1
     while(!GET_REQ()) {
-      if(!GET_SELECT()) goto send_burst_exit;
+      if(!GET_SELECT()) goto send_burst_abort_irq;
     }
     *(ptr++) = par_low_data_in();
     
     // wait REQ == 0
     while(GET_REQ()) {
-      if(!GET_SELECT()) goto send_burst_exit;
+      if(!GET_SELECT()) goto send_burst_abort_irq;
     }
     *(ptr++) = par_low_data_in();
   }
-send_burst_exit:
   sei();
   // END TIME CRITICAL
 
   // wait REQ == 1
   while(!GET_REQ()) {
-    if(!GET_SELECT()) goto send_burst_exit;
+    if(!GET_SELECT()) goto send_burst_abort;
   }
 
   CLR_RAK();
 
   // wait REQ == 0
   while(GET_REQ()) {
-    if(!GET_SELECT()) goto send_burst_exit;
+    if(!GET_SELECT()) goto send_burst_abort;
   }
 
   // error?
@@ -333,6 +332,13 @@ send_burst_exit:
 
   *ret_size = i << 1;
   return result;  
+
+send_burst_abort_irq:
+  sei();
+send_burst_abort:
+  CLR_RAK();
+  *ret_size = i << 1;
+  return PBPROTO_STATUS_TIMEOUT | PBPROTO_STAGE_DATA;
 }
 
 // delay loop for recv
@@ -396,7 +402,7 @@ static u08 cmd_recv_burst(u16 size, u16 *ret_size)
 
     // wait REQ == 0
     while(GET_REQ()) {
-      if(!GET_SELECT()) goto recv_burst_exit;
+      if(!GET_SELECT()) goto recv_burst_abort_irq;
     }
 
     DELAY
@@ -404,24 +410,23 @@ static u08 cmd_recv_burst(u16 size, u16 *ret_size)
 
     // wait REQ == 1
     while(!GET_REQ()) {
-      if(!GET_SELECT()) goto recv_burst_exit;
+      if(!GET_SELECT()) goto recv_burst_abort_irq;
     }
 
   }
-recv_burst_exit:
   sei();
   // END TIME CRITICAL
 
   // final wait REQ == 0
   while(GET_REQ()) {
-    if(!GET_SELECT()) goto recv_burst_exit;
+    if(!GET_SELECT()) goto recv_burst_abort;
   }
 
   SET_RAK();
     
   // final wait REQ == 1
   while(!GET_REQ()) {
-    if(!GET_SELECT()) goto recv_burst_exit;
+    if(!GET_SELECT()) goto recv_burst_abort;
   }
   
   // error?
@@ -437,6 +442,14 @@ recv_burst_exit:
 
   *ret_size = i << 1;
   return result;  
+
+recv_burst_abort_irq:
+  sei();
+recv_burst_abort:
+  CLR_RAK();
+  par_low_data_set_input();
+  *ret_size = i << 1;
+  return PBPROTO_STATUS_TIMEOUT | PBPROTO_STAGE_DATA;
 }
 
 u08 pb_proto_handle(void)
@@ -467,7 +480,11 @@ u08 pb_proto_handle(void)
   if((cmd == PBPROTO_CMD_RECV) || (cmd == PBPROTO_CMD_RECV_BURST)) {
     u08 res = fill_func(pb_buf, pb_buf_size, &pkt_size);
     if(res != PBPROTO_STATUS_OK) {
+      ps->cmd = cmd;
       ps->status = res;
+      ps->size = 0;
+      ps->is_send = 0;
+      ps->stats_id = STATS_ID_PB_RX;
       return res;
     }
   }

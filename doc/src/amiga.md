@@ -117,8 +117,8 @@ The following network stacks have been successfully tested with plipbox:
     - You can either configure your Amiga statically or with DHCP: Select
     `static` or `dynamic` in `IP Type, Netmask Type, Gateway Type`. Enter
     your network parameters in static mode.
-    - Note: multicast is not supported in plipbox. Therefore, keep
-    `Multicast: disabled`.
+    - Multicast requires a matching plipbox firmware and driver. With an older
+      firmware, keep `Multicast: disabled`.
     - Note: Configure DHCP in `TCP/IP Settings...` to fetch DNS servers, too.
   - In `Databases` Tab select Table `DNS servers` and add your static DNS
   server IPs (if you don't use dynamic DNS via DHCP)

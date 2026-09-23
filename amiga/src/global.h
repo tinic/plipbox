@@ -29,6 +29,12 @@ struct TrackRec {
    struct Sana2PacketTypeStats tr_Sana2PacketTypeStats;
 };
 
+struct MCastRec {
+   struct MinNode mr_Link;
+   UBYTE          mr_Addr[HW_ADDRFIELDSIZE];
+   ULONG          mr_Refs;
+};
+
 
 /****************************************************************************/
 
@@ -102,6 +108,7 @@ struct PLIPBase
                                pb_EventList,              /* event tracking */
                                pb_ReadOrphanList,   /* for spurious packets */
                                pb_TrackList,                  /* track type */
+                               pb_MCastList,                  /* joined groups */
                                pb_BufferManagement;          /* Copy-In/Out */
    struct SignalSemaphore      pb_EventListSem,     /* protection for lists */
                                pb_ReadListSem,
@@ -111,7 +118,7 @@ struct PLIPBase
                                pb_Lock;
 
    volatile UBYTE              pb_Flags;                       /* see below */
-   UBYTE                       pb_pad2;
+   UBYTE                       pb_Promiscuous;
    volatile UWORD              pb_ExtFlags;                    /* see below */
    UBYTE                       pb_CfgAddr[HW_ADDRFIELDSIZE];
    UBYTE                       pb_DefAddr[HW_ADDRFIELDSIZE];
