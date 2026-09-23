@@ -1,11 +1,15 @@
+      IFD GCC_BUILD
+      section ".text",code
+      ELSE
       section "text",code
+      ENDC
 
       IFND HARDARE_CIA_I
       include "hardware/cia.i"
       ENDC
 
-      IFND EXEC_MACROS_I
-      include "exec/macros.i"
+      IFND LVO_EXEC_LIB_I
+      include "lvo/exec_lib.i"
       ENDC
 
       IFND HWPAR_I
@@ -67,7 +71,7 @@ _interrupt:
         move.l  hwb_IntSigMask(a1),d0
         move.l  hwb_SysBase(a1),a6
         move.l  hwb_Server(a1),a1
-        JSRLIB  Signal
+        jsr     _LVOSignal(a6)
 skipint:
         moveq #0,d0
         rts
@@ -339,8 +343,8 @@ hwr_ExitError:
          
          ; reset signal
          moveq    #0,d0
-         move.l   hwb_IntSigMask(a1),d1
-         JSRLIB   SetSignal
+         move.l   hwb_IntSigMask(a2),d1
+         jsr      _LVOSetSignal(a6)
          
          ; clear RECV_PENDING flag set by irq
          bclr     #HWB_RECV_PENDING,hwb_Flags(a2)
@@ -372,6 +376,7 @@ _hwburstsend:
          movem.l  d2-d7/a2-a6,-(sp)
          move.l   a0,a2                               ; a2 = HWBase
          move.l   a1,a3                               ; a3 = Frame
+         move.l   hwb_SysBase(a2),a6                  ; ExecBase for Disable/Enable
          moveq    #FALSE,d2                           ; d2 = return value
          moveq    #HS_REQ_BIT,d3                      ; d3 = HS_REQ
          moveq    #HS_RAK_BIT,d4                      ; d4 = HS_RAK
@@ -452,7 +457,7 @@ bww_WaitRak3a:
 bww_RakOk3a:
 
          ; disable all irq
-         JSRLIB   Disable
+         jsr      _LVODisable(a6)
          
          ; --- burst loop begin
 bww_BurstLoop:
@@ -470,7 +475,7 @@ bww_BurstLoop:
          ; --- burst loop end
 
          ; enable all irq
-         JSRLIB   Enable
+         jsr      _LVOEnable(a6)
 
          bset     d3,(a5)                             ; set REQ=1
 
@@ -531,6 +536,7 @@ _hwburstrecv:
          movem.l  d2-d7/a2-a6,-(sp)
          move.l   a0,a2                               ; a2 = HWBase
          move.l   a1,a3                               ; a3 = Frame
+         move.l   hwb_SysBase(a2),a6                  ; ExecBase for Disable/Enable/SetSignal
          move.w   d0,d5                               ; d5 = burstSize in words
          moveq    #FALSE,d2                           ; d2 = return value
          moveq    #HS_REQ_BIT,d3                      ; d3 = HS_REQ
@@ -635,7 +641,7 @@ bwr_WaitRak3a:
 bwr_RakOk3a:
 
          ; disable all irq
-         JSRLIB   Disable
+         jsr      _LVODisable(a6)
                   
          ; --- burst loop begin
 bwr_BurstLoop:
@@ -653,7 +659,7 @@ bwr_BurstLoop:
          ; --- burst loop end
 
          ; enable all irq
-         JSRLIB   Enable
+         jsr      _LVOEnable(a6)
 
          bclr     d3,(a5)                             ; set REQ=0
 
@@ -689,8 +695,8 @@ bwr_ExitError:
 
          ; reset signal
          moveq    #0,d0
-         move.l   hwb_IntSigMask(a1),d1
-         JSRLIB   SetSignal
+         move.l   hwb_IntSigMask(a2),d1
+         jsr      _LVOSetSignal(a6)
          
          ; clear RECV_PENDING flag set by irq
          bclr     #HWB_RECV_PENDING,hwb_Flags(a2)

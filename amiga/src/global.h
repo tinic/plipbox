@@ -29,6 +29,12 @@ struct TrackRec {
    struct Sana2PacketTypeStats tr_Sana2PacketTypeStats;
 };
 
+struct MCastRec {
+   struct MinNode mr_Link;
+   UBYTE          mr_Addr[HW_ADDRFIELDSIZE];
+   ULONG          mr_Refs;
+};
+
 
 /****************************************************************************/
 
@@ -102,6 +108,7 @@ struct PLIPBase
                                pb_EventList,              /* event tracking */
                                pb_ReadOrphanList,   /* for spurious packets */
                                pb_TrackList,                  /* track type */
+                               pb_MCastList,                  /* joined groups */
                                pb_BufferManagement;          /* Copy-In/Out */
    struct SignalSemaphore      pb_EventListSem,     /* protection for lists */
                                pb_ReadListSem,
@@ -131,7 +138,23 @@ struct PLIPBase
      ** This macro declares a local variable which temporary gets
      ** SysBase directly from AbsExecBase.
      */
-#define LOCALSYSBASE struct { void *pb_SysBase; } *pb = (void*)0x4
+struct LocalSysBase { struct Library *pb_SysBase; };
+#ifdef __GNUC__
+static INLINE struct Library *local_exec_base(void)
+{
+   struct Library *base;
+   /* ExecBase is at absolute address 4 on classic AmigaOS. Do the absolute
+      read explicitly so GCC does not treat a fake C object at 4 as an
+      out-of-bounds struct access when it inlines Exec calls. */
+   __asm__ volatile ("move.l 4.w,%0" : "=a" (base));
+   return base;
+}
+#define LOCALSYSBASE \
+   struct LocalSysBase local_sysbase = { local_exec_base() }; \
+   struct LocalSysBase *pb = &local_sysbase
+#else
+#define LOCALSYSBASE struct LocalSysBase *pb = (void*)0x4
+#endif
      /*
      ** Use this macro as argument for all functions which need to
      ** have access to your data base.

@@ -39,6 +39,12 @@ The following network stacks have been successfully tested with plipbox:
 
         copy plipbox.device_RELEASE_000 devs:networks/plipbox.device
 
+   With a GCC source build, the default LTO output has a `_lto` suffix, for
+   example `plipbox.device_gcc_RELEASE_000_lto`. Build with a GCC 16.2.0b
+   cross toolchain that includes HUNK LTO plugin support and clean before
+   building. Use `LTO=0` only when comparing against a non-LTO build; it has
+   a separate output name.
+
 ### 2.2 AmiTCP with Network Boot Disk
 
  - For a very simple setup you can use the [Network Boot Disk for Amiga][nwbd]
@@ -117,8 +123,9 @@ The following network stacks have been successfully tested with plipbox:
     - You can either configure your Amiga statically or with DHCP: Select
     `static` or `dynamic` in `IP Type, Netmask Type, Gateway Type`. Enter
     your network parameters in static mode.
-    - Note: multicast is not supported in plipbox. Therefore, keep
-    `Multicast: disabled`.
+    - With the original 0.6 firmware and driver, keep `Multicast: disabled`.
+      The paired firmware and driver in this fork support selective multicast
+      joins for stacks that issue the SANA-II multicast commands.
     - Note: Configure DHCP in `TCP/IP Settings...` to fetch DNS servers, too.
   - In `Databases` Tab select Table `DNS servers` and add your static DNS
   server IPs (if you don't use dynamic DNS via DHCP)

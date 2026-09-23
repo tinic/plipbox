@@ -1,6 +1,33 @@
 plipbox
 =======
 
+Fork status
+-----------
+
+This fork adds a GCC-built Amiga driver and selective Ethernet multicast
+reception for IPv6 neighbour discovery. IPv6 needs the matching fork firmware
+and driver: the original 0.6 firmware does not program multicast memberships.
+The multicast filter is populated by the driver's SANA-II join/leave requests;
+the firmware admits only the selected hash buckets rather than all multicast
+traffic. The original plipbox licence and attribution below remain in force.
+
+The firmware's serial command `r` performs a soft reset. From the Amiga,
+take the interface offline and online to re-establish its session; there is
+currently no in-band hardware reset or firmware-update command. Flash over
+the board's serial bootloader or ISP, following the hardware-specific
+instructions in [Firmware](doc/src/firmware.md). Keep a verified backup of
+the working firmware before flashing. Do not flash while the adapter is
+connected to a powered Amiga parallel port.
+
+GCC driver builds use LTO by default. They require a GCC 16.2.0b cross
+toolchain with the HUNK LTO plugin fixes (tested with package revision 16.2.1);
+older HUNK linkers can silently omit LTO code. The build treats linker warnings
+as errors. It keeps LTO and `LTO=0` objects and outputs separate. Clean before
+each build. The
+68000 LTO driver measured 9,296 bytes versus 10,124 bytes without LTO on
+this source revision; a live A3000 test passed IPv4 and IPv6 with the LTO
+image. This is a modest code-size saving, not a measured performance gain.
+
 plipbox is an Arduino-based device that allows to connect low-end classic
 Amigas via Ethernet to your local network. It bridges IP traffic received
 via PLIP on the parallel port of the Amiga to the Ethernet port attached

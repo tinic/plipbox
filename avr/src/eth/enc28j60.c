@@ -328,15 +328,22 @@ static void writePhy (uint8_t address, uint16_t data) {
 // With the bit set, broadcast packets are filtered.
 static inline void enc28j60_enable_broadcast ( void ) 
 {
-  /* IPv6 neighbour discovery uses Ethernet multicast (33:33:xx:xx:xx:xx).
-   * Leave the unicast/broadcast filters intact and admit multicast frames;
-   * the Amiga's network stack selects the groups it actually consumes. */
-  writeRegByte(ERXFCON, ERXFCON_UCEN|ERXFCON_CRCEN|ERXFCON_MCEN|ERXFCON_BCEN);
+  /* HTEN admits only MACs selected by the SANA-II join table. MCEN would
+   * admit all LAN multicast and overwhelm the parallel link. */
+  writeRegByte(ERXFCON, ERXFCON_UCEN|ERXFCON_CRCEN|ERXFCON_HTEN|ERXFCON_BCEN);
 }
 
 static inline void enc28j60_disable_broadcast ( void ) 
 {
-  writeRegByte(ERXFCON, ERXFCON_UCEN|ERXFCON_CRCEN|ERXFCON_MCEN);
+  writeRegByte(ERXFCON, ERXFCON_UCEN|ERXFCON_CRCEN|ERXFCON_HTEN);
+}
+
+static u08 enc28j60_mcast_filter(const u08 hash[8])
+{
+  u08 i;
+  for (i = 0; i < 8; ++i)
+    writeRegByte(EHT0 + i, hash[i]);
+  return PIO_OK;
 }
 
 static u08 enc28j60_init(const u08 macaddr[6], u08 flags)
@@ -368,6 +375,10 @@ static u08 enc28j60_init(const u08 macaddr[6], u08 flags)
   writeReg(ETXND, TXSTOP_INIT);
   
   // set packet filter
+  {
+    static const u08 empty_hash[8] = {0};
+    enc28j60_mcast_filter(empty_hash);
+  }
   if(flags & PIO_INIT_BROAD_CAST) {
     enc28j60_enable_broadcast(); // change to add ERXFCON_BCEN recommended by epam
   } else {
@@ -689,5 +700,6 @@ const pio_dev_t PROGMEM pio_dev_enc28j60 = {
   .recv_f = enc28j60_recv,
   .has_recv_f = enc28j60_has_recv,
   .status_f = enc28j60_status,
-  .control_f = enc28j60_control
+  .control_f = enc28j60_control,
+  .mcast_filter_f = enc28j60_mcast_filter
 };

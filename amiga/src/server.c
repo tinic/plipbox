@@ -32,6 +32,68 @@ PRIVATE REGARGS VOID dowritereqs(BASEPTR);
 PRIVATE REGARGS VOID doreadreqs(BASEPTR);
 PRIVATE REGARGS VOID dos2reqs(BASEPTR);
 
+/* Runs only in the server task, so list mutation and hardware updates are
+ * serialized with online/offline and packet transfers. */
+PRIVATE REGARGS VOID change_mcast(BASEPTR, struct IOSana2Req *ios2, BOOL add)
+{
+   struct MCastRec *mr;
+   BOOL online = !(pb->pb_Flags & PLIPF_OFFLINE);
+   UBYTE *addr = ios2->ios2_SrcAddr;
+
+   if (!(addr[0] & 1)) {
+      ios2->ios2_Req.io_Error = S2ERR_BAD_ADDRESS;
+      ios2->ios2_WireError = S2WERR_BAD_MULTICAST;
+      return;
+   }
+
+   for (mr = (struct MCastRec *)pb->pb_MCastList.lh_Head;
+        mr->mr_Link.mln_Succ != NULL;
+        mr = (struct MCastRec *)mr->mr_Link.mln_Succ)
+      if (memcmp(mr->mr_Addr, addr, HW_ADDRFIELDSIZE) == 0)
+         break;
+
+   if (mr->mr_Link.mln_Succ == NULL) mr = NULL;
+
+   if (add) {
+      if (mr != NULL) {
+         if (mr->mr_Refs == 0xffffffffUL)
+            ios2->ios2_Req.io_Error = S2ERR_NO_RESOURCES;
+         else
+            ++mr->mr_Refs;
+         return;
+      }
+      mr = (struct MCastRec *)AllocVec(sizeof(*mr), MEMF_CLEAR | MEMF_ANY);
+      if (mr == NULL) {
+         ios2->ios2_Req.io_Error = S2ERR_NO_RESOURCES;
+         return;
+      }
+      memcpy(mr->mr_Addr, addr, HW_ADDRFIELDSIZE);
+      mr->mr_Refs = 1;
+      AddTail((struct List *)&pb->pb_MCastList, (struct Node *)mr);
+      if (online && !hw_replay_mcast_filter(pb)) {
+         Remove((struct Node *)mr);
+         FreeVec(mr);
+         ios2->ios2_Req.io_Error = S2ERR_TX_FAILURE;
+      }
+   } else {
+      if (mr == NULL) {
+         ios2->ios2_Req.io_Error = S2ERR_BAD_STATE;
+         return;
+      }
+      if (mr->mr_Refs > 1) {
+         --mr->mr_Refs;
+         return;
+      }
+      Remove((struct Node *)mr);
+      if (online && !hw_replay_mcast_filter(pb)) {
+         AddTail((struct List *)&pb->pb_MCastList, (struct Node *)mr);
+         ios2->ios2_Req.io_Error = S2ERR_TX_FAILURE;
+      } else {
+         FreeVec(mr);
+      }
+   }
+}
+
    /*
    ** functions to go online/offline
    */
@@ -40,7 +102,7 @@ PRIVATE REGARGS VOID rejectpackets(BASEPTR)
    struct IOSana2Req *ios2;
 
    ObtainSemaphore(&pb->pb_WriteListSem);
-   while(ios2 = (struct IOSana2Req *)RemHead((struct List*)&pb->pb_WriteList))
+   while((ios2 = (struct IOSana2Req *)RemHead((struct List*)&pb->pb_WriteList)) != NULL)
    {
       ios2->ios2_Req.io_Error = S2ERR_OUTOFSERVICE;
       ios2->ios2_WireError = S2WERR_UNIT_OFFLINE;
@@ -49,7 +111,7 @@ PRIVATE REGARGS VOID rejectpackets(BASEPTR)
    ReleaseSemaphore(&pb->pb_WriteListSem);
 
    ObtainSemaphore(&pb->pb_ReadListSem);
-   while(ios2 = (struct IOSana2Req *)RemHead((struct List*)&pb->pb_ReadList))
+   while((ios2 = (struct IOSana2Req *)RemHead((struct List*)&pb->pb_ReadList)) != NULL)
    {
       ios2->ios2_Req.io_Error = S2ERR_OUTOFSERVICE;
       ios2->ios2_WireError = S2WERR_UNIT_OFFLINE;
@@ -58,7 +120,7 @@ PRIVATE REGARGS VOID rejectpackets(BASEPTR)
    ReleaseSemaphore(&pb->pb_ReadListSem);
 
    ObtainSemaphore(&pb->pb_ReadOrphanListSem);
-   while(ios2 = (struct IOSana2Req *)RemHead((struct List*)&pb->pb_ReadOrphanList))
+   while((ios2 = (struct IOSana2Req *)RemHead((struct List*)&pb->pb_ReadOrphanList)) != NULL)
    {
       ios2->ios2_Req.io_Error = S2ERR_OUTOFSERVICE;
       ios2->ios2_WireError = S2WERR_UNIT_OFFLINE;
@@ -77,11 +139,21 @@ PRIVATE REGARGS BOOL goonline(BASEPTR)
    {
       if (!hw_attach(pb))
       {
+         /* hw_attach may have acquired one or both parallel resources
+          * before the handshake failed. Release every partial acquire. */
+         hw_detach(pb);
          d(("error going online\n"));
          rc = FALSE;
       }
       else
       {
+         /* A new firmware session starts with an empty hash. Avoid a second
+          * back-to-back parallel transfer when no group has been joined. */
+         if (pb->pb_MCastList.lh_Head->ln_Succ != NULL &&
+             !hw_replay_mcast_filter(pb)) {
+            hw_detach(pb);
+            return FALSE;
+         }
          hw_get_sys_time(pb, &pb->pb_DevStats.LastStart);
          pb->pb_Flags &= ~PLIPF_OFFLINE;
          DoEvent(pb, S2EVENT_ONLINE);
@@ -406,14 +478,8 @@ PRIVATE REGARGS VOID dos2reqs(BASEPTR)
    ** and similar stuff).
    ** You find the same mimique in the 1st level dispatcher (device.c)
    */
-   while(ios2 = (struct IOSana2Req *)GetMsg(pb->pb_ServerPort))
+   while((ios2 = (struct IOSana2Req *)GetMsg(pb->pb_ServerPort)) != NULL)
    {
-      if (hw_recv_pending(pb))
-      {
-         d(("incoming data!"));
-         break;
-      }
-
       d(("sana2req %ld from serverport\n", ios2->ios2_Req.io_Command));
 
       switch (ios2->ios2_Req.io_Command)
@@ -446,6 +512,14 @@ PRIVATE REGARGS VOID dos2reqs(BASEPTR)
                ios2->ios2_Req.io_Error = S2ERR_NO_RESOURCES;
                ios2->ios2_WireError = S2WERR_GENERIC_ERROR;
             }
+         break;
+
+         case S2_ADDMULTICASTADDRESS:
+            change_mcast(pb, ios2, TRUE);
+         break;
+
+         case S2_DELMULTICASTADDRESS:
+            change_mcast(pb, ios2, FALSE);
          break;
       }
 
@@ -574,11 +648,15 @@ PRIVATE BOOL init(BASEPTR)
 PRIVATE VOID cleanup(BASEPTR)
 {
    struct BufferManagement *bm;
+   struct MCastRec *mr;
 
    gooffline(pb);
 
-   while(bm = (struct BufferManagement *)RemHead((struct List *)&pb->pb_BufferManagement))
+   while((bm = (struct BufferManagement *)RemHead((struct List *)&pb->pb_BufferManagement)) != NULL)
       FreeVec(bm);
+
+   while((mr = (struct MCastRec *)RemHead((struct List *)&pb->pb_MCastList)) != NULL)
+      FreeVec(mr);
 
    if (pb->pb_Frame) FreeVec(pb->pb_Frame);
 
@@ -632,12 +710,15 @@ PUBLIC VOID SAVEDS ServerTask(void)
          {
             d4(("** wmask is 0x%08lx\n", wmask));
 
-            /* if no recv is pending then wait for incoming signals */
+            /* A busy receive path must still service control requests and
+             * shutdown. Drain pending signals without blocking when the
+             * interrupt flag already promises work. */
             if (!hw_recv_pending(pb)) {
                d2(("**> wait\n"));
                recv = Wait(wmask);
                d2(("**> wait: got 0x%08lx\n", recv));
-            }
+            } else
+               recv = SetSignal(0, wmask) & wmask;
 
             /* accept pending receive and start reading */
             if (hw_recv_pending(pb))
@@ -683,4 +764,3 @@ PUBLIC VOID SAVEDS ServerTask(void)
    else
       d(("no startup packet\n"));
 }
-

@@ -24,7 +24,7 @@ DEVICE_NAME = plipbox
 DEVICE_VERSION = $(VERSION_MAJ)
 DEVICE_REVISION = $(VERSION_MIN)
 DEVICE_DATE = $(shell date '+%d.%m.%Y')
-DEVICE_FILE = $(DEVICE_NAME).device_$(COMPILER)_$(BUILD_TYPE)_$(CPUSUFFIX)
+DEVICE_FILE = $(DEVICE_NAME).device_$(COMPILER)_$(BUILD_TYPE)_$(CPUSUFFIX)$(LTO_SUFFIX)
 DEVICE_ID = $(DEVICE_NAME) $(DEVICE_VERSION).$(DEVICE_REVISION) ($(DEVICE_DATE))
 
 # include compiler setup
@@ -43,7 +43,7 @@ endif
 endif
 
 # output directory
-BUILD_DIR = build_$(COMPILER)_$(BUILD_TYPE)_$(CPUSUFFIX)
+BUILD_DIR = build_$(COMPILER)_$(BUILD_TYPE)_$(CPUSUFFIX)$(LTO_SUFFIX)
 BUILD_PATH = $(OBJ_DIR)/$(BUILD_DIR)
 
 # generic source files
@@ -61,12 +61,12 @@ OBJS+=$(patsubst %.asm,$(BUILD_PATH)/%.o,$(ASRC) $(ASRC_$(DRIVER_NAME)))
 DEVICE = $(BIN_DIR)/$(DEVICE_FILE)
 
 # the plipbox test tool
-DEV_TEST_TOOL_NAME = dev_test_$(COMPILER)_$(BUILD_TYPE)_$(CPUSUFFIX)
+DEV_TEST_TOOL_NAME = dev_test_$(COMPILER)_$(BUILD_TYPE)_$(CPUSUFFIX)$(LTO_SUFFIX)
 DEV_TEST_TOOL = $(BIN_DIR)/$(DEV_TEST_TOOL_NAME)
 DEV_TEST_TOOL_OBJ = $(BUILD_PATH)/dev_test.o
 
 # the udp test tool
-UDP_TEST_TOOL_NAME = udp_test_$(COMPILER)_$(BUILD_TYPE)_$(CPUSUFFIX)
+UDP_TEST_TOOL_NAME = udp_test_$(COMPILER)_$(BUILD_TYPE)_$(CPUSUFFIX)$(LTO_SUFFIX)
 UDP_TEST_TOOL = $(BIN_DIR)/$(UDP_TEST_TOOL_NAME)
 UDP_TEST_TOOL_OBJ = $(BUILD_PATH)/udp_test.o
 
@@ -109,10 +109,10 @@ dist_all:
 	$(MAKE) COMPILER=gcc dist
 
 clean: clean_obj
-	rm -f $(DEVICE)
+	rm -f $(DEVICE) $(DEV_TEST_TOOL) $(UDP_TEST_TOOL)
 
 clean_obj:
-	rm -f $(OBJS)
+	rm -f $(OBJS) $(DEV_TEST_TOOL_OBJ) $(UDP_TEST_TOOL_OBJ)
 
 clean_dist:
 	rm -rf $(BIN_DIR) $(OBJ_DIR)

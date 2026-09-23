@@ -229,7 +229,7 @@ dirs:
 	@if [ ! -d $(DEPDIR) ]; then mkdir -p $(DEPDIR); fi
 	@if [ ! -d $(OUTDIR) ]; then mkdir -p $(OUTDIR); fi
 
-build: dirs hdr hex lss size
+build: dirs hdr hex lss size timing
 
 hdr:
 	@echo "--- building BOARD=$(BOARD) F_CPU=$(F_CPU) MCU=$(MCU) FLASH_MCU=$(FLASH_MCU) ---"
@@ -261,6 +261,16 @@ size_data: $(OUTPUT).elf
 		echo "  $$SIZE >  $(MAX_SRAM) bytes: sram TOO LARGE" ; exit 1 ; \
 	else \
 		echo "  $$SIZE <= $(MAX_SRAM) bytes: sram ok" ; \
+	fi
+
+# Burst transfers have cycle-sensitive handshakes.  An avr-gcc update once
+# outlined these pin helpers despite `static inline`, corrupting both RX and
+# TX without a protocol error.  Keep the executable, not the C syntax, gated.
+timing: $(OUTPUT).elf
+	@if $(NM) $(OUTPUT).elf | grep -Eq ' [tT] par_low_(data_in|data_out|get_pout|get_select|set_busy_lo|set_busy_hi)$$'; then \
+		echo '  timing check failed: parallel pin helper was outlined'; exit 1; \
+	else \
+		echo '  timing check ok: parallel pin helpers are inlined'; \
 	fi
 
 size_symbols: $(OUTPUT).elf
@@ -325,7 +335,7 @@ $(OBJDIR)/%.o : %.c
 -include $(shell mkdir -p $(DEPDIR) 2>/dev/null) $(wildcard $(DEPDIR)/*.d)
 
 .PRECIOUS: $(OBJ)
-.PHONY: all dirs elf hex prog clean avrlib clean.edit hdr size_code size_data size
+.PHONY: all dirs elf hex prog clean avrlib clean.edit hdr size_code size_data size timing
 
 # ----- AVRdude --------------------------------------------------------------
 

@@ -26,10 +26,19 @@
 #include "hw.h"
 #include "hwbase.h"
 
+/* Newer NDK inline headers use CIA_BASE_NAME rather than the resource
+ * pointer passed to each call. Resolve it through this server's HWBase. */
+#ifdef __GNUC__
+#ifndef CIA_BASE_NAME
+#define CIA_BASE_NAME CIAABase
+#endif
+#endif
+
 /* magic packet types */
 #define HW_MAGIC_ONLINE    0xffff
 #define HW_MAGIC_OFFLINE   0xfffe
 #define HW_MAGIC_LOOPBACK  0xfffd
+#define HW_MAGIC_MCAST_FILTER 0xfffc
 
 /* externs in asm code */
 GLOBAL VOID ASM interrupt(REG(a1,struct HWBase *hwb));
@@ -39,8 +48,15 @@ GLOBAL BOOL ASM hwrecv(REG(a0,struct HWBase *hwb), REG(a1,struct HWFrame *frame)
 GLOBAL BOOL ASM hwburstsend(REG(a0,struct HWBase *), REG(a1,struct HWFrame *));
 GLOBAL BOOL ASM hwburstrecv(REG(a0,struct HWBase *), REG(a1,struct HWFrame *));
 
-   /* amiga.lib provides for these symbols */
+   /* amiga.lib provides these symbols for SAS C and vbcc. With GCC's
+      base-relative device build, use explicit absolute MMIO addresses:
+      __far on the already-defined struct type is ignored by GCC. */
+#ifdef __GNUC__
+#define ciaa (*(volatile struct CIA *)0xbfe001UL)
+#define ciab (*(volatile struct CIA *)0xbfd000UL)
+#else
 extern FAR volatile struct CIA ciaa,ciab;
+#endif
 
 PRIVATE ULONG ASM SAVEDS exceptcode(REG(d0,ULONG sigmask), REG(a1,struct PLIPBase *hwb));
 
@@ -80,6 +96,53 @@ static REGARGS BOOL hw_send_magic_pkt(struct PLIPBase *pb, USHORT magic)
    
    rc = hw_send_frame(pb, frame) ? TRUE : FALSE;
    return rc;
+}
+
+/* The ENC28J60 uses bits 28:23 of its non-reflected Ethernet CRC as the
+ * 64-entry destination-address hash (Microchip ENC28J60, section 8.4). */
+static UBYTE mcast_bucket(const UBYTE addr[HW_ADDRFIELDSIZE])
+{
+   ULONG crc = 0xffffffffUL;
+   UWORD i, bit;
+
+   for (i = 0; i < HW_ADDRFIELDSIZE; ++i)
+      for (bit = 0; bit < 8; ++bit)
+         crc = (((crc >> 31) ^ (addr[i] >> bit)) & 1)
+                  ? (crc << 1) ^ 0x04c11db7UL : crc << 1;
+
+   return (UBYTE)((crc >> 23) & 63);
+}
+
+static BOOL hw_send_mcast_hash(struct PLIPBase *pb, const UBYTE hash[8])
+{
+   struct HWFrame *frame = pb->pb_Frame;
+   UBYTE *data = (UBYTE *)(frame + 1);
+   UWORD i;
+
+   frame->hwf_Size = HW_ETH_HDR_SIZE + 16;
+   memset(frame->hwf_DstAddr, 0, HW_ADDRFIELDSIZE);
+   memcpy(frame->hwf_SrcAddr, pb->pb_CfgAddr, HW_ADDRFIELDSIZE);
+   frame->hwf_Type = HW_MAGIC_MCAST_FILTER;
+   for (i = 0; i < 8; ++i) {
+      data[i] = hash[i];
+      data[8 + i] = (UBYTE)~hash[i];
+   }
+   return hw_send_frame(pb, frame);
+}
+
+GLOBAL REGARGS BOOL hw_replay_mcast_filter(struct PLIPBase *pb)
+{
+   UBYTE hash[8] = {0};
+   struct MCastRec *mr;
+
+   for (mr = (struct MCastRec *)pb->pb_MCastList.lh_Head;
+        mr->mr_Link.mln_Succ != NULL;
+        mr = (struct MCastRec *)mr->mr_Link.mln_Succ) {
+      UBYTE bucket = mcast_bucket(mr->mr_Addr);
+      hash[bucket >> 3] |= (UBYTE)(1U << (bucket & 7));
+   }
+
+   return hw_send_mcast_hash(pb, hash);
 }
 
 GLOBAL REGARGS void hw_get_sys_time(struct PLIPBase *pb, struct timeval *time)
@@ -142,6 +205,7 @@ GLOBAL REGARGS BOOL hw_init(struct PLIPBase *pb)
      d(("no memory!\n"));
      return FALSE;
    }
+   hwb->hwb_IntSig = (ULONG)-1;
    
    /* clone sys base, process */
    hwb->hwb_SysBase = pb->pb_SysBase;
@@ -206,6 +270,8 @@ GLOBAL REGARGS BOOL hw_init(struct PLIPBase *pb)
 GLOBAL REGARGS VOID hw_cleanup(struct PLIPBase *pb)
 {
    struct HWBase *hwb = (struct HWBase *)pb->pb_HWBase;
+
+   if (hwb == NULL) return;
    
    if (hwb->hwb_TimeoutPort)
    {
@@ -220,7 +286,7 @@ GLOBAL REGARGS VOID hw_cleanup(struct PLIPBase *pb)
       if (TimerBase)
       {
          WaitIO((struct IORequest*)&hwb->hwb_TimeoutReq);
-         CloseDevice((struct IORequest*)&hwb->hwb_CollReq);
+         CloseDevice((struct IORequest*)&hwb->hwb_TimeoutReq);
       }
       DeleteMsgPort(hwb->hwb_TimeoutPort);
    }
@@ -323,7 +389,8 @@ GLOBAL REGARGS VOID hw_detach(struct PLIPBase *pb)
    struct HWBase *hwb = (struct HWBase *)pb->pb_HWBase;
    
    /* first tell mcu to go offline */
-   hw_send_magic_pkt(pb, HW_MAGIC_OFFLINE);
+   if (hwb->hwb_AllocFlags & 4)
+      hw_send_magic_pkt(pb, HW_MAGIC_OFFLINE);
 
    if (hwb->hwb_AllocFlags & 4)
    {
@@ -435,6 +502,16 @@ GLOBAL REGARGS BOOL hw_recv_frame(struct PLIPBase *pb, struct HWFrame *frame)
          break;
       }
 
+      /* A corrupt length must never reach the SANA-II buffer-copy path.
+       * The assembly transfer has checked the maximum buffer size, but a
+       * zero or partial Ethernet header would make the payload length
+       * negative and turn it into a huge unsigned copy size. */
+      if(frame->hwf_Size < HW_ETH_HDR_SIZE ||
+         frame->hwf_Size > hwb->hwb_MaxFrameSize) {
+         rc = FALSE;
+         break;
+      }
+
       /* perform internal loop back of magic packets of type 0xfffd */
       pkttyp = frame->hwf_Type;
       if(pkttyp == HW_MAGIC_LOOPBACK) {
@@ -445,6 +522,8 @@ GLOBAL REGARGS BOOL hw_recv_frame(struct PLIPBase *pb, struct HWFrame *frame)
       else if(pkttyp == HW_MAGIC_ONLINE) {
          d(("request online magic"));
          rc = hw_send_magic_pkt(pb, HW_MAGIC_ONLINE);
+         if (rc && pb->pb_MCastList.lh_Head->ln_Succ != NULL)
+            rc = hw_replay_mcast_filter(pb);
       }
       else {
          break;

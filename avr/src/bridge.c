@@ -49,11 +49,22 @@
 
 static u08 flags;
 static u08 req_is_pending;
+static u32 request_ts;
+static u08 buffered_frame;
+static u16 buffered_size;
+
+/* A single ACK pulse can be missed while the Amiga installs its CIA vector
+ * or while another parallel transfer is in flight. Keep the same pending
+ * frame and pulse again at most every 100 ms until the receive command
+ * actually consumes it. time_stamp advances in 100 us ticks. */
+#define REQUEST_RETRY_TICKS 1000UL
 
 static void trigger_request(void)
 {
-  if(!req_is_pending) {
+  u32 now = time_stamp;
+  if(!req_is_pending || (u32)(now - request_ts) >= REQUEST_RETRY_TICKS) {
     req_is_pending = 1;
+    request_ts = now;
     pb_proto_request_recv();
     if(global_verbose) {
       uart_send_time_stamp_spc();
@@ -71,9 +82,14 @@ static void trigger_request(void)
 
 static void magic_online(const u08 *buf)
 {
+  static const u08 empty_hash[8] = {0};
   uart_send_time_stamp_spc();
   uart_send_pstring(PSTR("[MAGIC] online\r\n"));
   flags |= FLAG_ONLINE | FLAG_FIRST_TRANSFER;
+
+  /* Each online session starts without memberships. The Amiga driver
+   * replays its joined groups after the online handshake when needed. */
+  pio_mcast_filter(empty_hash);
 
   // validate mac address and if it does not match then reconfigure PIO
   const u08 *src_mac = eth_get_src_mac(buf);
@@ -92,13 +108,33 @@ static void magic_offline(void)
 {
   uart_send_time_stamp_spc();
   uart_send_pstring(PSTR("[MAGIC] offline\r\n"));
-  flags &= ~FLAG_ONLINE;
+  /* A queued Ethernet frame may have pulsed ACK before the Amiga took the
+   * unit down. Do not carry that unacknowledged request into the next online
+   * session: it otherwise suppresses the new session's first request. */
+  flags &= ~(FLAG_ONLINE | FLAG_SEND_MAGIC | FLAG_FIRST_TRANSFER);
+  req_is_pending = 0;
+  buffered_frame = 0;
 }
 
 static void magic_loopback(u16 size)
 {
   flags |= FLAG_SEND_MAGIC;
   trigger_request();
+}
+
+static void magic_mcast_filter(const u08 *buf, u16 size)
+{
+  u08 i;
+  /* Control packets come only from the parallel port. Requiring the configured
+   * source MAC, exact length and complemented copy rejects common parallel
+   * bit errors instead of turning the receive filter into an arbitrary mask. */
+  if(size != ETH_HDR_SIZE + 16 ||
+     !net_compare_mac(eth_get_src_mac(buf), param.mac_addr))
+    return;
+  for(i = 0; i < 8; ++i)
+    if((u08)(buf[ETH_HDR_SIZE + i] ^ buf[ETH_HDR_SIZE + 8 + i]) != 0xff)
+      return;
+  pio_mcast_filter(buf + ETH_HDR_SIZE);
 }
 
 static void request_magic(void)
@@ -118,8 +154,6 @@ static u08 fill_pkt(u08 *buf, u16 max_size, u16 *size)
 {
   // need to send a magic?
   if((flags & FLAG_SEND_MAGIC) == FLAG_SEND_MAGIC) {
-    flags &= ~FLAG_SEND_MAGIC;
-
     // build magic packet
     net_copy_bcast_mac(pkt_buf + ETH_OFF_TGT_MAC);
     net_copy_mac(param.mac_addr, pkt_buf + ETH_OFF_SRC_MAC);
@@ -127,18 +161,17 @@ static u08 fill_pkt(u08 *buf, u16 max_size, u16 *size)
 
     *size = ETH_HDR_SIZE;
   } else {
-    // pending PIO packet?
-    pio_util_recv_packet(size);
-
-    // report first packet transfer
-    if(flags & FLAG_FIRST_TRANSFER) {
-      flags &= ~FLAG_FIRST_TRANSFER;
-      uart_send_time_stamp_spc();
-      uart_send_pstring(PSTR("FIRST TRANSFER!\r\n"));
+    /* Keep the frame in pkt_buf until the parallel transfer succeeds.
+     * A select/handshake timeout must not silently consume it. */
+    if(!buffered_frame) {
+      if(pio_util_recv_packet(&buffered_size) != PIO_OK) {
+        req_is_pending = 0;
+        return PBPROTO_STATUS_ERROR;
+      }
+      buffered_frame = 1;
     }
+    *size = buffered_size;
   }
-
-  req_is_pending = 0;
 
   return PBPROTO_STATUS_OK;  
 }
@@ -146,17 +179,25 @@ static u08 fill_pkt(u08 *buf, u16 max_size, u16 *size)
 // handle incoming packet from Amiga
 static u08 proc_pkt(const u08 *buf, u16 size)
 {
+  if(size < ETH_HDR_SIZE)
+    return PBPROTO_STATUS_ERROR;
+
   // get eth type
   u16 eth_type = eth_get_pkt_type(buf);
   switch(eth_type) {
     case ETH_TYPE_MAGIC_ONLINE:
+      if(size != ETH_HDR_SIZE) return PBPROTO_STATUS_ERROR;
       magic_online(buf);
       break;
     case ETH_TYPE_MAGIC_OFFLINE:
+      if(size != ETH_HDR_SIZE) return PBPROTO_STATUS_ERROR;
       magic_offline();
       break;
     case ETH_TYPE_MAGIC_LOOPBACK:
       magic_loopback(size);
+      break;
+    case ETH_TYPE_MAGIC_MCAST_FILTER:
+      magic_mcast_filter(buf, size);
       break;
     default:
       // send packet via pio
@@ -186,6 +227,9 @@ u08 bridge_loop(void)
   // online flag
   flags = 0;
   req_is_pending = 0;
+  request_ts = 0;
+  buffered_frame = 0;
+  buffered_size = 0;
 
   u08 flow_control = param.flow_ctl;
   u08 limit_flow = 0;
@@ -198,7 +242,33 @@ u08 bridge_loop(void)
     }
 
     // handle pbproto
-    pb_util_handle();
+    {
+      u08 status = pb_util_handle();
+      u08 cmd = pb_proto_stat.cmd;
+      if(status == PBPROTO_STATUS_OK &&
+         (cmd == PBPROTO_CMD_RECV || cmd == PBPROTO_CMD_RECV_BURST)) {
+        if(flags & FLAG_SEND_MAGIC) {
+          flags &= ~FLAG_SEND_MAGIC;
+        } else if(buffered_frame) {
+          buffered_frame = 0;
+          if(flags & FLAG_FIRST_TRANSFER) {
+            flags &= ~FLAG_FIRST_TRANSFER;
+            uart_send_time_stamp_spc();
+            uart_send_pstring(PSTR("FIRST TRANSFER!\r\n"));
+          }
+        }
+        req_is_pending = 0;
+      } else if(cmd == PBPROTO_CMD_SEND || cmd == PBPROTO_CMD_SEND_BURST) {
+        /* Both directions share pkt_buf. Even a failed Amiga send may have
+         * overwritten a buffered receive, so never replay stale bytes. */
+        if(buffered_frame) {
+          buffered_frame = 0;
+          req_is_pending = 0;
+          if(flags & FLAG_SEND_MAGIC)
+            trigger_request();
+        }
+      }
+    }
 
     // incoming packet via PIO available?
     u08 n = pio_has_recv();
@@ -225,6 +295,11 @@ u08 bridge_loop(void)
         uart_send_crlf();
       }
     }
+
+    /* Retry an unconsumed magic packet too, even when no Ethernet frame is
+     * queued. Otherwise a lost first pulse can strand initial handshakes. */
+    if(req_is_pending && ((flags & FLAG_SEND_MAGIC) || buffered_frame))
+      trigger_request();
 
     // flow control
     if(flow_control) {

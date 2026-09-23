@@ -10,6 +10,8 @@
 #include <hardware/cia.h>
 #include <dos/dostags.h>
 #include <resources/misc.h>
+#include <exec/errors.h>
+#include <exec/io.h>
 #include <exec/memory.h>
 
 #include <string.h>
@@ -80,6 +82,7 @@ PUBLIC ASM SAVEDS struct Device *DevInit(REG(d0,BASEPTR), REG(a0,BPTR seglist), 
    NewList((struct List*)&pb->pb_EventList);
    NewList((struct List*)&pb->pb_ReadOrphanList);
    NewList((struct List*)&pb->pb_TrackList);
+   NewList((struct List*)&pb->pb_MCastList);
    NewList((struct List*)&pb->pb_BufferManagement);
 
       /* initialise the access protection semaphores */
@@ -99,9 +102,9 @@ PUBLIC ASM SAVEDS struct Device *DevInit(REG(d0,BASEPTR), REG(a0,BPTR seglist), 
 
    ok = FALSE;
 
-   if (UtilityBase = OpenLibrary((STRPTR)"utility.library", 37))
+   if ((UtilityBase = OpenLibrary((STRPTR)"utility.library", 37)) != NULL)
    {
-      if (DOSBase = OpenLibrary((STRPTR)"dos.library", 37))
+      if ((DOSBase = OpenLibrary((STRPTR)"dos.library", 37)) != NULL)
       {
          ok = TRUE;
       }
@@ -163,12 +166,11 @@ PUBLIC ASM SAVEDS LONG DevOpen(REG(a1,struct IOSana2Req *ios2), REG(d0,ULONG uni
          ** 13.05.96: Detlef Wuerkner <TetiSoft@apg.lahn.de>
          ** Rememer unit of 1st OpenDevice()
          */
-         if (pb->pb_DevNode.lib_OpenCnt == 1)
-            pb->pb_Unit = unit;
-
-         /* setup default mac */
-         {
+         if (pb->pb_DevNode.lib_OpenCnt == 1) {
             unsigned char addr[6] = { 0x1a,0x11,0xaf,0xa0,0x47,0x11};
+            pb->pb_Unit = unit;
+            /* Preserve a configured MAC when a second client opens the
+             * already-running device for statistics or control. */
             memcpy(pb->pb_CfgAddr, addr, HW_ADDRFIELDSIZE);
             memcpy(pb->pb_DefAddr, addr, HW_ADDRFIELDSIZE);
          }
@@ -196,11 +198,11 @@ PUBLIC ASM SAVEDS LONG DevOpen(REG(a1,struct IOSana2Req *ios2), REG(d0,ULONG uni
                volatile struct ServerStartup ss;
                struct MsgPort *port;
 
-               if (port = CreateMsgPort())
+               if ((port = CreateMsgPort()) != NULL)
                {
                   d(("starting server"));
-                  if (pb->pb_Server = CreateNewProcTags(NP_Entry, (ULONG)ServerTask, NP_Name,
-                                                                  (ULONG)SERVERTASKNAME, TAG_DONE))
+                  if ((pb->pb_Server = CreateNewProcTags(NP_Entry, (ULONG)ServerTask, NP_Name,
+                                                                  (ULONG)SERVERTASKNAME, TAG_DONE)) != NULL)
                   {
                      ss.ss_Error = 1;
                      ss.ss_PLIPBase = pb;
@@ -371,7 +373,7 @@ static INLINE VOID DevForwardIO(BASEPTR, struct IOSana2Req *ios2)
    d(("forwarding request %ld\n", ios2->ios2_Req.io_Command));
 
    /* request is no longer of type "quick i/o" */
-   ios2->ios2_Req.io_Flags &= ~SANA2IOF_QUICK;
+   ios2->ios2_Req.io_Flags &= ~IOF_QUICK;
    PutMsg(pb->pb_ServerPort, (struct Message*)ios2);
 }
 PUBLIC VOID DevTermIO(BASEPTR, struct IOSana2Req *ios2)
@@ -381,7 +383,7 @@ PUBLIC VOID DevTermIO(BASEPTR, struct IOSana2Req *ios2)
                   /* if this command was done asynchonously, we must
                   ** reply the request
                   */
-   if(!(ios2->ios2_Req.io_Flags & SANA2IOF_QUICK))
+   if(!(ios2->ios2_Req.io_Flags & IOF_QUICK))
       ReplyMsg((struct Message *)ios2);
    else           /* otherwise just mark it as done */
       ios2->ios2_Req.io_Message.mn_Node.ln_Type = NT_REPLYMSG;
@@ -404,7 +406,7 @@ PUBLIC ASM SAVEDS VOID DevBeginIO(REG(a1,struct IOSana2Req *ios2), REG(a6,BASEPT
       ** a task switch. This is called "Quick I/O" and signalled to DoIO()
       ** by setting the node type of the request to NT_REPLYMSG (see TermIO()).
       **
-      ** Otherwise, we clear the SANA2IOF_QUICK flag and forward the request to
+      ** Otherwise, we clear the IOF_QUICK flag and forward the request to
       ** the server. We may NEVER again access the request structure after
       ** the PutMsg()! The server - running at a high priority - will peempt
       ** us and might complety satisfy the request before we will be wakened up
@@ -426,7 +428,7 @@ PUBLIC ASM SAVEDS VOID DevBeginIO(REG(a1,struct IOSana2Req *ios2), REG(a6,BASEPT
          }
          else
          {
-            ios2->ios2_Req.io_Flags &= ~SANA2IOF_QUICK;
+            ios2->ios2_Req.io_Flags &= ~IOF_QUICK;
             ObtainSemaphore(&pb->pb_ReadListSem);
             AddTail((struct List*)&pb->pb_ReadList, (struct Node*)ios2);
             ReleaseSemaphore(&pb->pb_ReadListSem);
@@ -444,7 +446,12 @@ PUBLIC ASM SAVEDS VOID DevBeginIO(REG(a1,struct IOSana2Req *ios2), REG(a6,BASEPT
          if(ios2->ios2_Req.io_Flags & SANA2IOF_RAW) {
             mtu += HW_ETH_HDR_SIZE;
          }
-         if(ios2->ios2_DataLength > mtu)
+         if((ios2->ios2_Req.io_Flags & SANA2IOF_RAW) &&
+            ios2->ios2_DataLength < HW_ETH_HDR_SIZE)
+         {
+            ios2->ios2_Req.io_Error = S2ERR_BAD_ARGUMENT;
+         }
+         else if(ios2->ios2_DataLength > mtu)
          {
             ios2->ios2_Req.io_Error = S2ERR_MTU_EXCEEDED;
          }
@@ -460,7 +467,7 @@ PUBLIC ASM SAVEDS VOID DevBeginIO(REG(a1,struct IOSana2Req *ios2), REG(a6,BASEPT
          }
          else
          {
-            ios2->ios2_Req.io_Flags &= ~SANA2IOF_QUICK;
+            ios2->ios2_Req.io_Flags &= ~IOF_QUICK;
             ios2->ios2_Req.io_Error = 0;
             ObtainSemaphore(&pb->pb_WriteListSem);
             AddTail((struct List*)&pb->pb_WriteList, (struct Node*)ios2);
@@ -473,6 +480,8 @@ PUBLIC ASM SAVEDS VOID DevBeginIO(REG(a1,struct IOSana2Req *ios2), REG(a6,BASEPT
       case S2_ONLINE:
       case S2_OFFLINE:
       case S2_CONFIGINTERFACE:   /* forward request */
+      case S2_ADDMULTICASTADDRESS:
+      case S2_DELMULTICASTADDRESS:
          DevForwardIO(pb, ios2);
          ios2 = NULL;
       break;
@@ -522,7 +531,7 @@ PUBLIC ASM SAVEDS VOID DevBeginIO(REG(a1,struct IOSana2Req *ios2), REG(a6,BASEPT
          else
          {
             /* Queue anything else */
-            ios2->ios2_Req.io_Flags &= ~SANA2IOF_QUICK;
+            ios2->ios2_Req.io_Flags &= ~IOF_QUICK;
             ObtainSemaphore(&pb->pb_EventListSem);
             AddTail((struct List*)&pb->pb_EventList, (struct Node*)ios2);
             ReleaseSemaphore(&pb->pb_EventListSem);
@@ -568,7 +577,7 @@ PUBLIC ASM SAVEDS VOID DevBeginIO(REG(a1,struct IOSana2Req *ios2), REG(a6,BASEPT
          }
          else
          {                       /* Enqueue it to the orphan-reader-list */
-            ios2->ios2_Req.io_Flags &= ~SANA2IOF_QUICK;
+            ios2->ios2_Req.io_Flags &= ~IOF_QUICK;
             ObtainSemaphore(&pb->pb_ReadOrphanListSem);
             AddTail((struct List*)&pb->pb_ReadOrphanList, (struct Node*)ios2);
             ReleaseSemaphore(&pb->pb_ReadOrphanListSem);
@@ -612,8 +621,6 @@ PUBLIC ASM SAVEDS VOID DevBeginIO(REG(a1,struct IOSana2Req *ios2), REG(a6,BASEPT
       break;
 
          /* other commands (SANA-2) we don't support */
-      /*case S2_ADDMULTICASTADDRESS:*/
-      /*case S2_DELMULTICASTADDRESS:*/
       /*case S2_MULTICAST:*/
       default:
          ios2->ios2_Req.io_Error = S2ERR_NOT_SUPPORTED;
@@ -663,10 +670,9 @@ leave:
 }
 
 
-#ifdef __GNUC__
+#if defined(__GNUC__) && defined(BASEREL)
 extern void __restore_a4(void)
 {
     __asm volatile("\tlea ___a4_init, a4");
 }
 #endif
-

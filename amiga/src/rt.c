@@ -31,7 +31,14 @@ static const ULONG LibInitTab[] =
 static const char DeviceName[] = DEVICE_NAME;
 static const char DeviceId[]   = "Id: " DEVICE_ID "\r\n";
 
-static const struct Resident ROMTag =
+#ifdef __GNUC__
+/* Exec scans the loaded hunk for this magic structure. GCC can otherwise
+ * constant-fold its field uses below and remove the entire ROMTag. */
+#define KEEP_RESIDENT __attribute__((used))
+#else
+#define KEEP_RESIDENT
+#endif
+static const struct Resident ROMTag KEEP_RESIDENT =
 {
   RTC_MATCHWORD,
   (struct Resident *)&ROMTag,

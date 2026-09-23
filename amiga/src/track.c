@@ -113,8 +113,7 @@ PUBLIC VOID freetracktypes(BASEPTR)
    struct Node *tr;
 
    ObtainSemaphore(&pb->pb_TrackListSem);
-   while(tr = RemHead((struct List*)&pb->pb_TrackList))
+   while((tr = RemHead((struct List*)&pb->pb_TrackList)) != NULL)
       FreeVec(tr);
    ReleaseSemaphore(&pb->pb_TrackListSem);
 }
-

@@ -119,3 +119,8 @@ u08 pio_control(u08 control_id, u08 value)
 {
   return pio_dev_control(cur_dev, control_id, value);
 }
+
+u08 pio_mcast_filter(const u08 hash[8])
+{
+  return pio_dev_mcast_filter(cur_dev, hash);
+}
