@@ -27,11 +27,18 @@
  
 OS=$(shell uname -s)
 
-# install dir of avr libc (here MacPorts location)
+# Set AVR_TOOLCHAIN to the root of a self-contained AVR toolchain.
+AVR_TOOLCHAIN ?=
+ifneq ($(strip $(AVR_TOOLCHAIN)),)
+TOOLBIN = $(AVR_TOOLCHAIN)/bin/
+AVRLIBC_DIR = $(AVR_TOOLCHAIN)/avr
+else
+# install dir of avr libc for a system toolchain
 ifeq "$(OS)" "Darwin"
 AVRLIBC_DIR = /opt/local/avr
 else
 AVRLIBC_DIR = /usr/lib/avr
+endif
 endif
 
 ALL_BOARDS= arduino avrnetio nano
@@ -41,6 +48,13 @@ DIST_BOARDS= arduino avrnetio nano
 BOARD ?= nano
 DEBUG ?= 1
 DEV_ENC28J60 ?= 1
+LTO ?= 1
+
+ifneq ($(LTO),0)
+ifneq ($(LTO),1)
+$(error LTO must be 0 or 1)
+endif
+endif
 
 ifeq "$(BOARD)" "arduino"
 
@@ -131,7 +145,7 @@ include ../../version.mk
 BUILD_DATE = $(shell date '+%Y%m%d')
 
 # basename of output
-BASENAME = $(PROJECT)-$(VERSION)-$(UART_BAUD)-$(BOARD)-$(MCU)
+BASENAME = $(PROJECT)-$(VERSION)-$(UART_BAUD)-$(BOARD)-$(MCU)$(if $(filter 1,$(LTO)),-lto,)
 # project
 OUTPUT = $(OUTDIR)/$(BASENAME)
 # dist dir
@@ -177,9 +191,15 @@ CFLAGS += -Os
 CFLAGS += -Wall -Werror -Wstrict-prototypes
 CFLAGS += -I$(AVRLIBC_DIR)/include
 CFLAGS += -mmcu=$(MCU) -I. -Ibase -Ieth
+ifeq ($(LTO),1)
+CFLAGS += -flto -fuse-linker-plugin
+endif
  
-CFLAGS_LOCAL = -Wa,-adhlns=$(OBJDIR)/$(notdir $(<:%.c=%.lst))
-CFLAGS_LOCAL += -Wp,-M,-MP,-MT,$(OBJDIR)/$(*F).o,-MF,$(DEPDIR)/$(@F:.o=.d)
+CFLAGS_LOCAL = -Wp,-M,-MP,-MT,$(OBJDIR)/$(*F).o,-MF,$(DEPDIR)/$(@F:.o=.d)
+ifeq ($(LTO),0)
+# Per-object assembler listings conflict at LTO's single final assembler run.
+CFLAGS_LOCAL += -Wa,-adhlns=$(OBJDIR)/$(notdir $(<:%.c=%.lst))
+endif
 CFLAGS_LOCAL += -DVERSION_MIN="$(VERSION_MIN)" -DVERSION_MAJ="$(VERSION_MAJ)"
 CFLAGS_LOCAL += -DVERSION="\"$(VERSION)\"" -DBUILD_DATE="\"$(BUILD_DATE)\""
 CFLAGS_LOCAL += -DHAVE_$(BOARD) -DUART_BAUD=$(UART_BAUD) -DBOARD=$(BOARD)
@@ -187,21 +207,24 @@ CFLAGS_LOCAL += -DF_CPU=$(F_CPU)
 CFLAGS_LOCAL += $(patsubst %,-D%,$(DEFINES))
 
 # linker switches
-LDFLAGS = -Wl,-Map=$(OUTPUT).map,--cref
+LDFLAGS = -Wl,-Map=$(OUTPUT).map,--cref,--fatal-warnings
 LDFLAGS += -lm -lc
+ifeq ($(LTO),1)
+LDFLAGS += -flto -fuse-linker-plugin
+endif
 
 # Define programs and commands.
 SHELL = sh
-CC = avr-gcc
-OBJCOPY = avr-objcopy
-OBJDUMP = avr-objdump
-SIZE = avr-size
-NM = avr-nm
+CC = $(TOOLBIN)avr-gcc
+OBJCOPY = $(TOOLBIN)avr-objcopy
+OBJDUMP = $(TOOLBIN)avr-objdump
+SIZE = $(TOOLBIN)avr-size
+NM = $(TOOLBIN)avr-nm
 AVRDUDE = avrdude
 REMOVE = rm -f
 COPY = cp
-RANLIB = avr-ranlib
-AR = avr-ar
+RANLIB = $(TOOLBIN)avr-ranlib
+AR = $(TOOLBIN)avr-ar
 
 # define V to see compile output
 ifdef V
@@ -220,6 +243,7 @@ help:
 	@echo "  supported boards: $(ALL_BOARDS)"
 	@echo
 	@echo "build [BOARD=<board>]"
+	@echo "      LTO=1 (default) or LTO=0"
 	@echo "prog [BOARD=<board>]"
 	@echo "clean"
 

@@ -28,6 +28,20 @@ each build. The
 this source revision; a live A3000 test passed IPv4 and IPv6 with the LTO
 image. This is a modest code-size saving, not a measured performance gain.
 
+AVR firmware builds also use LTO by default (`LTO=0` disables it). Use the
+[AVR-GCC 16.1.0 bundle](https://github.com/ZakKemble/avr-gcc-build/releases/tag/v16.1.0-1)
+with AVR binutils 2.46.1 and avr-libc 2.3.2. Verify its published SHA-256
+before extraction (Linux x64 archive:
+`8621ecc6514df50202b58b23b0f8f72f0e535ec35ee40426194e9a15c57692f6`).
+From `avr/src`, run `make clean` before each build,
+then `make BOARD=nano AVR_TOOLCHAIN=/path/to/avr-gcc-16.1.0-x64-linux`.
+The compiler/linker bundle and its matching headers are selected together by
+`AVR_TOOLCHAIN`. Firmware output names carry `-lto` when LTO is enabled.
+With this source revision, the Nano image is 12,565 bytes of flash with LTO
+versus 14,533 without; static SRAM use is 1,789 versus 1,806 bytes. The
+ATmega328P still has only 259 bytes beyond static allocation for the stack,
+so a build-size check alone is not a firmware stability test.
+
 plipbox is an Arduino-based device that allows to connect low-end classic
 Amigas via Ethernet to your local network. It bridges IP traffic received
 via PLIP on the parallel port of the Amiga to the Ethernet port attached

@@ -1,6 +1,25 @@
 plipbox: Firmware Documentation
 ===============================
 
+Building this fork's firmware
+-----------------------------
+
+The tested Linux build toolchain is the
+[AVR-GCC 16.1.0 bundle](https://github.com/ZakKemble/avr-gcc-build/releases/tag/v16.1.0-1)
+with AVR binutils 2.46.1 and avr-libc 2.3.2. Verify its published SHA-256
+before extraction. Its default build uses link-time optimisation. Set
+`AVR_TOOLCHAIN` to the extracted toolchain root so the compiler, linker, and
+headers come from the same bundle. Clean before every build:
+
+    cd avr/src
+    make clean
+    make BOARD=nano AVR_TOOLCHAIN=/path/to/avr-gcc-16.1.0-x64-linux
+
+Use `LTO=0` for a non-LTO comparison, again after `make clean`. The build
+checks flash/SRAM limits and rejects an outlined parallel-port pin helper;
+passing these checks does not replace a live transfer test. The LTO firmware
+filename ends in `-lto.hex`. Select the correct board variant before flashing.
+
 1. Flash Firmware
 -----------------
 
@@ -39,60 +58,30 @@ registered devices before and after attaching the device.
 Some AVR devices like the Arduino-based ones allow you to flash the firmware
 via the (virtual) serial link.
 
-First select correct firmware file for flashing. The firmware used for the
-Arduino 2009 prototype is called `*-ardiuno-*.hex` and the firmware for the
+First select the correct firmware file for flashing. The firmware used for the
+Arduino 2009 prototype is called `*-arduino-*.hex` and the firmware for the
 plipbox nano production version is called `*-nano-*.hex`. Choose the version
 matching your hardware. Both have the same features but use a slightly
 different pinout for accessing the Amiga's parallel port.
 
 For flashing the firmware you need a flash tool on your Mac/PC that talks via
-this serial port. I use [avrdude][ad] here. It is available on all platforms and
-a command line tools.
+this serial port. [avrdude][ad] 8.3 was used for the ATmega328P serial flash
+and readback checks. It is available on all platforms.
 
-[ad]: http://www.nongnu.org/avrdude/
+[ad]: https://github.com/avrdudes/avrdude/releases
 
 Now open a shell/terminal/cmd.exe on your OS and call the firmware tool with:
 
-        > avrdude -p m328p -P <your_serial_port> -b 57600 -c arduino -U flash:w:plipbox-0.x-57600-arduino-atmega328.hex
+        > avrdude -p m328p -P <your_serial_port> -b 57600 -c arduino -U flash:w:plipbox-0.6-57600-arduino-atmega328-lto.hex
 
-This assumes that you have the plipbox firmware file called
-`plipbox-0.x-57600-arduino-atmega328.hex` in your current directory.
-In the release archive you can find it in the `avr/firmware` directory.
+This assumes that you have the LTO firmware file called
+`plipbox-0.6-57600-arduino-atmega328-lto.hex` in your current directory.
+Use the exact filename produced by your build (or supplied in a release).
 
 Furthermore, replace `<your_serial_port>` with the device name of your
-Ardiuno serial device found in section 1.1.
-
-If everything works well then you will see the following output:
-
-        avrdude: AVR device initialized and ready to accept instructions
-
-        Reading | ################################################## | 100% 0.00s
-
-        avrdude: Device signature = 0x1e950f
-        avrdude: NOTE: FLASH memory has been specified, an erase cycle will be performed
-                 To disable this feature, specify the -D option.
-        avrdude: erasing chip
-        avrdude: reading input file "plipbox-0.x-57600-arduino-atmega328.hex"
-        avrdude: input file plipbox-0.x-57600-arduino-atmega328.hex auto detected as Intel Hex
-        avrdude: writing flash (16596 bytes):
-
-        Writing | ################################################## | 100% 4.67s
-
-        avrdude: 16596 bytes of flash written
-        avrdude: verifying flash memory against plipbox-0.x-57600-arduino-atmega328.hex:
-        avrdude: load data flash data from input file plipbox-0.x-57600-arduino-atmega328.hex:
-        avrdude: input file plipbox-0.x-57600-arduino-atmega328.hex auto detected as Intel Hex
-        avrdude: input file plipbox-0.x-57600-arduino-atmega328.hex contains 16596 bytes
-        avrdude: reading on-chip flash data:
-
-        Reading | ################################################## | 100% 3.37s
-
-        avrdude: verifying ...
-        avrdude: 16596 bytes of flash verified
-
-        avrdude: safemode: Fuses OK
-
-        avrdude done.  Thank you.
+Arduino serial device found in section 1.1. Check that avrdude reports the
+expected device signature (`0x1e950f` for ATmega328P) and completes its write
+and verify stages without an error.
 
 Now your device is fully operational and we use the serial link to communicate
 with plipbox.
@@ -109,12 +98,12 @@ and amazon.
 The AVR-NET-IO-Board from Pollin.de needs to be flashed via ISP and this
 firmware variant:
 
-        plipbox-<version>-57600-avrnetio-atmega32.hex
+        plipbox-<version>-57600-avrnetio-atmega32-lto.hex
 
 Again you can use `avrdude` to flash the firmware. The command avrdude is as
 follows:
 
-        > avrdude -p m32 -c usbasp -U flash:w:plipbox-0.1-57600-avrnetio-atmega32.hex
+        > avrdude -p m32 -c usbasp -U flash:w:plipbox-0.6-57600-avrnetio-atmega32-lto.hex
 
 Please note the different flash adapter `usbasp` here and that you do not need
 a serial speed now.
@@ -631,8 +620,4 @@ back to the sender.
         -V=VERBOSE      Be more verbose
 
 EOF
-
-
-
-
 
