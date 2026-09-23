@@ -237,7 +237,7 @@ hdr:
 
 elf: $(OUTPUT).elf $(OUTPUT).lss $(OUTPUT).sym
 	@echo "  --- resulting elf ---"
-	$(HIDE)$(SIZE) $(OUTPUT).elf -C --mcu=$(MCU)
+	$(HIDE)$(SIZE) -B $(OUTPUT).elf
 
 hex: $(OUTPUT).hex
 
@@ -246,7 +246,8 @@ lss: $(OUTPUT).lss
 size: size_code size_data
 
 size_code: $(OUTPUT).elf
-	@SIZE=`$(SIZE) -C $(OUTPUT).elf | grep Program | awk '{ print $$2 }'` ; \
+	@SIZE=`$(SIZE) -B $(OUTPUT).elf | awk 'NR == 2 { print $$1 + $$2 }'` ; \
+	if [ -z "$$SIZE" ]; then echo "  size check failed"; exit 1; fi ; \
 	if [ $$SIZE -gt $(MAX_SIZE) ] ; then \
 		echo "  $$SIZE >  $(MAX_SIZE) bytes: code TOO LARGE" ; exit 1 ; \
 	else \
@@ -254,7 +255,8 @@ size_code: $(OUTPUT).elf
 	fi
 
 size_data: $(OUTPUT).elf
-	@SIZE=`$(SIZE) -C $(OUTPUT).elf | fgrep Data | awk '{ print $$2 }'` ; \
+	@SIZE=`$(SIZE) -B $(OUTPUT).elf | awk 'NR == 2 { print $$2 + $$3 }'` ; \
+	if [ -z "$$SIZE" ]; then echo "  size check failed"; exit 1; fi ; \
 	if [ $$SIZE -gt $(MAX_SRAM) ] ; then \
 		echo "  $$SIZE >  $(MAX_SRAM) bytes: sram TOO LARGE" ; exit 1 ; \
 	else \

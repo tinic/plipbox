@@ -328,12 +328,15 @@ static void writePhy (uint8_t address, uint16_t data) {
 // With the bit set, broadcast packets are filtered.
 static inline void enc28j60_enable_broadcast ( void ) 
 {
-  writeRegByte(ERXFCON, ERXFCON_UCEN|ERXFCON_CRCEN/*|ERXFCON_PMEN*/|ERXFCON_BCEN);
+  /* IPv6 neighbour discovery uses Ethernet multicast (33:33:xx:xx:xx:xx).
+   * Leave the unicast/broadcast filters intact and admit multicast frames;
+   * the Amiga's network stack selects the groups it actually consumes. */
+  writeRegByte(ERXFCON, ERXFCON_UCEN|ERXFCON_CRCEN|ERXFCON_MCEN|ERXFCON_BCEN);
 }
 
 static inline void enc28j60_disable_broadcast ( void ) 
 {
-  writeRegByte(ERXFCON, ERXFCON_UCEN|ERXFCON_CRCEN/*|ERXFCON_PMEN*/);
+  writeRegByte(ERXFCON, ERXFCON_UCEN|ERXFCON_CRCEN|ERXFCON_MCEN);
 }
 
 static u08 enc28j60_init(const u08 macaddr[6], u08 flags)
