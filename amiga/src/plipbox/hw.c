@@ -167,6 +167,9 @@ GLOBAL REGARGS void hw_config_init(struct PLIPBase *pb,
   hwb->hwb_TimeOutSecs = PLIP_DEFTIMEOUT / 1000000L;
   hwb->hwb_TimeOutMicros = PLIP_DEFTIMEOUT % 1000000L;
   hwb->hwb_BurstMode = 1;
+  /* burst recv is open loop (next byte ~1.1us after REQ); too fast for
+     Emu68/PiStorm CIA access, so recv handshakes per byte unless RXBURST */
+  hwb->hwb_BurstRecv = 0;
 
   *template_str = (STRPTR)(COMMON_TEMPLATE TEMPLATE);
   *config_file = (STRPTR)CONFIGFILE;
@@ -184,8 +187,13 @@ GLOBAL REGARGS void hw_config_update(struct PLIPBase *pb)
     hwb->hwb_TimeOutSecs = to / 1000000L;
   }
 
+  if(args->rx_burst) {
+    hwb->hwb_BurstRecv = 1;
+  }
+
   if(args->no_burst) {
     hwb->hwb_BurstMode = 0;
+    hwb->hwb_BurstRecv = 0;
   }
 }
 
@@ -196,6 +204,7 @@ GLOBAL REGARGS void hw_config_dump(struct PLIPBase *pb)
 #endif
   d(("timeOut %ld.%ld\n", hwb->hwb_TimeOutSecs, hwb->hwb_TimeOutMicros));
   d(("burstMode %ld\n", (ULONG)hwb->hwb_BurstMode));
+  d(("burstRecv %ld\n", (ULONG)hwb->hwb_BurstRecv));
 }
 
 GLOBAL REGARGS BOOL hw_init(struct PLIPBase *pb)
@@ -487,7 +496,7 @@ GLOBAL REGARGS BOOL hw_recv_frame(struct PLIPBase *pb, struct HWFrame *frame)
       SendIO((struct IORequest*)&hwb->hwb_TimeoutReq);
 
       /* hw recv */
-      if(hwb->hwb_BurstMode) {
+      if(hwb->hwb_BurstRecv) {
         d8(("+rxb\n"));
         rc = hwburstrecv(hwb, frame);
       } else {
