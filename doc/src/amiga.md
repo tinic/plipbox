@@ -199,12 +199,17 @@ next reboot, too:
 
 The following options are supported:
 
-  - **NOBURST** (switch /S) (default: burst on)
+  - **NOBURST** (switch /S) (default: burst send on)
     - Starting with version 0.6 a fast burst mode is used for parallel port
-      data transfer. It is always recommended to use this mode. However, if
-      you experience problems with fast transfers then you can use this
-      option to fall back to the old transfer protocol. Its slower but
-      more reliable.
+      data transfer. This option turns burst mode off for both directions
+      and falls back to the old transfer protocol, which is slower but
+      handshakes every byte.
+
+  - **RXBURST** (switch /S) (default: off)
+    - Receives in burst mode too. Burst receive has no per-byte handshake
+      and fails when the Amiga's parallel port access is slower than the
+      firmware's byte hold time, for example on Emu68/PiStorm. Receive uses
+      the handshaked protocol unless this option is set.
 
   - **TIMEOUT** (numerical key /K/N) (default: 500 * 1000) (unit: microseconds)
     - The parallel transfer uses time outs to detect error conditions.
