@@ -1,6 +1,25 @@
 plipbox: ChangeLog
 ==================
 
+fork release 0.6.2-multicast (2026-10-28)
+-----------------------------------------
+
+- driver: a magic packet (online request or loopback) is handled in one
+  receive again; the extra unrequested receive moved the firmware's read
+  pointer and left frames held until the next arrival (seconds of latency)
+- driver: a size-0 answer from the firmware means "no frame"
+- firmware unchanged from 0.6-multicast
+
+fork release 0.6.1-multicast (2026-10-28)
+-----------------------------------------
+
+- driver: the config template includes the common options again, so
+  NOBURST, TIMEOUT and the common keys reach the right fields
+- driver: receive uses the per-byte handshake by default; RXBURST restores
+  burst receive, which fails on slow port access such as Emu68/PiStorm
+- driver: NOBURST turns off burst in both directions
+- firmware unchanged from 0.6-multicast
+
 fork release 0.6-multicast (2026-09-23)
 ---------------------------------------
 
