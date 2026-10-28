@@ -241,6 +241,17 @@ The following options are supported:
     - Note that a non 1500 MTU will cause fragmentation on upper levels.
 
 
+### Receive latency of several seconds
+
+A driver older than 0.6.2-multicast could leave the firmware's receive
+read pointer behind the ENC28J60 buffer, typically after the Nano was
+reset or reflashed while the Amiga was online. Frames then wait until the
+next frame arrives, and ping takes seconds. The state survives driver
+changes and Amiga reboots. To clear it, update the driver, then either
+reset the plipbox while the Amiga is offline, or bring the interface online
+once with a different `HARDWAREADDRESS` and then with the usual one; a MAC
+change makes the firmware reinitialise the ENC28J60.
+
 4. Build plipbox.device from Source
 -----------------------------------
 

@@ -483,62 +483,66 @@ GLOBAL REGARGS BOOL hw_recv_frame(struct PLIPBase *pb, struct HWFrame *frame)
 {
    ULONG pkttyp;
    struct HWBase *hwb = (struct HWBase *)pb->pb_HWBase;
-   BOOL rc = TRUE;
+   BOOL rc;
 
-   while(1) {
-      /* wait until I/O block is safe to be reused */
-      while(!hwb->hwb_TimeoutSet) Delay(1L);
+   /* wait until I/O block is safe to be reused */
+   while(!hwb->hwb_TimeoutSet) Delay(1L);
 
-      /* start new timeout timer */
-      hwb->hwb_TimeoutReq.tr_time.tv_secs    = hwb->hwb_TimeOutSecs;
-      hwb->hwb_TimeoutReq.tr_time.tv_micro   = hwb->hwb_TimeOutMicros;
-      hwb->hwb_TimeoutSet = 0;
-      SendIO((struct IORequest*)&hwb->hwb_TimeoutReq);
+   /* start new timeout timer */
+   hwb->hwb_TimeoutReq.tr_time.tv_secs    = hwb->hwb_TimeOutSecs;
+   hwb->hwb_TimeoutReq.tr_time.tv_micro   = hwb->hwb_TimeOutMicros;
+   hwb->hwb_TimeoutSet = 0;
+   SendIO((struct IORequest*)&hwb->hwb_TimeoutReq);
 
-      /* hw recv */
-      if(hwb->hwb_BurstRecv) {
-        d8(("+rxb\n"));
-        rc = hwburstrecv(hwb, frame);
-      } else {
-        d8(("+rx\n"));
-        rc = hwrecv(hwb, frame);
-      }
-      d8(("+rx: %s\n", rc ? "ok":"ERR"));
+   /* hw recv */
+   if(hwb->hwb_BurstRecv) {
+     d8(("+rxb\n"));
+     rc = hwburstrecv(hwb, frame);
+   } else {
+     d8(("+rx\n"));
+     rc = hwrecv(hwb, frame);
+   }
+   d8(("+rx: %s\n", rc ? "ok":"ERR"));
 
-      /* stop timeout timer */
-      AbortIO((struct IORequest*)&hwb->hwb_TimeoutReq);
+   /* stop timeout timer */
+   AbortIO((struct IORequest*)&hwb->hwb_TimeoutReq);
 
-      /* error? */
-      if(!rc) {
-         break;
-      }
+   if(!rc) {
+      return FALSE;
+   }
 
-      /* A corrupt length must never reach the SANA-II buffer-copy path.
-       * The assembly transfer has checked the maximum buffer size, but a
-       * zero or partial Ethernet header would make the payload length
-       * negative and turn it into a huge unsigned copy size. */
-      if(frame->hwf_Size < HW_ETH_HDR_SIZE ||
-         frame->hwf_Size > hwb->hwb_MaxFrameSize) {
-         rc = FALSE;
-         break;
-      }
+   /* Size 0: the firmware had nothing to send. */
+   if(frame->hwf_Size == 0) {
+      return TRUE;
+   }
 
-      /* perform internal loop back of magic packets of type 0xfffd */
-      pkttyp = frame->hwf_Type;
-      if(pkttyp == HW_MAGIC_LOOPBACK) {
-         d(("loop back packet (size %ld)\n",frame->hwf_Size));
-         rc = hw_send_frame(pb, frame);
-      }
-      /* plipbox requests online magic (again) */
-      else if(pkttyp == HW_MAGIC_ONLINE) {
-         d(("request online magic"));
-         rc = hw_send_magic_pkt(pb, HW_MAGIC_ONLINE);
-         if (rc && pb->pb_MCastList.lh_Head->ln_Succ != NULL)
-            rc = hw_replay_mcast_filter(pb);
-      }
-      else {
-         break;
-      }
+   /* A corrupt length must never reach the SANA-II buffer-copy path.
+    * The assembly transfer has checked the maximum buffer size, but a
+    * partial Ethernet header would make the payload length
+    * negative and turn it into a huge unsigned copy size. */
+   if(frame->hwf_Size < HW_ETH_HDR_SIZE ||
+      frame->hwf_Size > hwb->hwb_MaxFrameSize) {
+      return FALSE;
+   }
+
+   /* Magic packets are answered here and give the caller no frame (size 0).
+    * Do not receive again without a new request: the firmware then reads
+    * the ENC28J60 ring with no packet counted (avr/src/bridge.c fill_pkt),
+    * its read pointer falls behind, and from then on each frame waits for
+    * later arrivals. v0.6 also returned after a magic packet. */
+   pkttyp = frame->hwf_Type;
+   if(pkttyp == HW_MAGIC_LOOPBACK) {
+      d(("loop back packet (size %ld)\n",frame->hwf_Size));
+      rc = hw_send_frame(pb, frame);
+      frame->hwf_Size = 0;
+   }
+   /* plipbox requests online magic (again) */
+   else if(pkttyp == HW_MAGIC_ONLINE) {
+      d(("request online magic"));
+      rc = hw_send_magic_pkt(pb, HW_MAGIC_ONLINE);
+      if (rc && pb->pb_MCastList.lh_Head->ln_Succ != NULL)
+         rc = hw_replay_mcast_filter(pb);
+      frame->hwf_Size = 0;
    }
    return rc;
 }

@@ -383,6 +383,11 @@ PRIVATE REGARGS VOID doreadreqs(BASEPTR)
    d8(("+hw_recv\n"));
    rv = hw_recv_frame(pb, frame);
    d8(("-hw_recv\n"));
+
+   /* nothing for the upper layers (magic packet or empty answer) */
+   if (rv && frame->hwf_Size == 0)
+      return;
+
    if (rv)
    {
       pb->pb_DevStats.PacketsReceived++;
