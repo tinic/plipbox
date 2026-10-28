@@ -168,7 +168,7 @@ GLOBAL REGARGS void hw_config_init(struct PLIPBase *pb,
   hwb->hwb_TimeOutMicros = PLIP_DEFTIMEOUT % 1000000L;
   hwb->hwb_BurstMode = 1;
 
-  *template_str = (STRPTR)TEMPLATE;
+  *template_str = (STRPTR)(COMMON_TEMPLATE TEMPLATE);
   *config_file = (STRPTR)CONFIGFILE;
   *cfg = (struct CommonConfig *)&hwb->hwb_Config;
 }
