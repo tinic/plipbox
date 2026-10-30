@@ -316,7 +316,8 @@ hwr_WaitRak5a:
 hwr_RakOk5a: 
          ; Read <DATA_n>
          move.b   ciaa+ciaprb-BaseAX(a5),(a3)+        ; read par port byte
-         bclr     d3,(a5)                             ; toggle REQ
+         bclr     d3,d0                               ; REQ=0 on the RAK poll value:
+         move.b   d0,(a5)                             ; one CIA write, no read-modify-write
 
          ; -- odd bytes: 1,3,5,...
          ; Wait RAK == 1
@@ -331,7 +332,8 @@ hwr_WaitRak5b:
 hwr_RakOk5b: 
          ; Read <DATA_n>
          move.b   ciaa+ciaprb-BaseAX(a5),(a3)+        ; read par port byte
-         bset    d3,(a5)                              ; toggle REQ
+         bset     d3,d0                               ; REQ=1 on the RAK poll value
+         move.b   d0,(a5)
 
          ; loop for all packet bytes
          dbra     d6,hwr_WaitRak5a
@@ -458,18 +460,26 @@ bww_RakOk3a:
 
          ; disable all irq
          jsr      _LVODisable(a6)
-         
+
+         ; Nothing else writes ciab PRA with interrupts off, so REQ is
+         ; toggled by writing two precomputed values: one CIA access per
+         ; edge instead of a read-modify-write.
+         move.b   (a5),d0
+         move.b   d0,d1
+         bset     d3,d1                               ; d1 = PRA with REQ=1
+         bclr     d3,d0                               ; d0 = PRA with REQ=0
+
          ; --- burst loop begin
 bww_BurstLoop:
          ; set even data 0,2,4,...
          move.b   (a3)+,(a4)                          ; write data to port
          ; Toggle REQ
-         bset     d3,(a5)                             ; set REQ=1
+         move.b   d1,(a5)                             ; set REQ=1
          
          ; set odd data 1,3,5,...
          move.b   (a3)+,(a4)                          ; write data to port
          ; Toggle REQ
-         bclr     d3,(a5)                             ; set REQ=1
+         move.b   d0,(a5)                             ; set REQ=0
 
          dbra     d6,bww_BurstLoop
          ; --- burst loop end
