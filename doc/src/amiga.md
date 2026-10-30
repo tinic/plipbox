@@ -220,7 +220,7 @@ The following options are supported:
     - Use this switch to disable the extra statistics information that is
       recorded during normal operation of the device.
 
-  - **PRIORITY** (numerical key /K/N) (default: 0) (unit: AmigaOS task prio)
+  - **PRIORITY** (numerical key /K/N) (default: 10) (unit: AmigaOS task prio)
     - A server task is used in the plipbox.device to handle the parallel port
       transfers.
     - Use this value to alter the scheduling priority of the send/receive
