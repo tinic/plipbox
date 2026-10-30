@@ -316,8 +316,11 @@ hwr_WaitRak5a:
 hwr_RakOk5a: 
          ; Read <DATA_n>
          move.b   ciaa+ciaprb-BaseAX(a5),(a3)+        ; read par port byte
-         bclr     d3,d0                               ; REQ=0 on the RAK poll value:
-         move.b   d0,(a5)                             ; one CIA write, no read-modify-write
+         ; REQ=0 written from the RAK poll value: one CIA access instead
+         ; of two.  Not atomic: an RTS/DTR change landing between the poll
+         ; and this write is undone (serial.device sets them on open/params).
+         bclr     d3,d0
+         move.b   d0,(a5)
 
          ; -- odd bytes: 1,3,5,...
          ; Wait RAK == 1
