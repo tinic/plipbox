@@ -562,6 +562,7 @@ PRIVATE struct PLIPBase *startup(void)
 
 #define PLIP_MINPRIORITY         -128
 #define PLIP_MAXPRIORITY         127
+#define PLIP_DEFPRIORITY         10
 
 PRIVATE VOID readargs(BASEPTR)
 {
@@ -574,6 +575,11 @@ PRIVATE VOID readargs(BASEPTR)
    d(("entered\n"));
 
    hw_config_init(pb, &template_string, &args, &config_file);
+
+   /* The server is the device bottom half: it must run before the stack
+    * and the applications it feeds, or a busy task at the same priority
+    * holds a queued frame for a whole quantum.  PRIORITY overrides it. */
+   SetTaskPri((struct Task*)pb->pb_Server, PLIP_DEFPRIORITY);
 
    if((cfginput = Open(config_file, MODE_OLDFILE))!=0)
    {
