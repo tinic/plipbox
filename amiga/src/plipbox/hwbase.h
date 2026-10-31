@@ -11,6 +11,7 @@ struct TemplateConfig
    ULONG *timeout;
    ULONG no_burst;
    ULONG rx_burst;
+   ULONG no_rx_strobe;
 };
 
 struct HWBase
@@ -42,6 +43,9 @@ struct HWBase
    ULONG                       hwb_TimeOutSecs;
    UWORD                       hwb_BurstMode;     /* burst send */
    UWORD                       hwb_BurstRecv;     /* burst receive */
+   UWORD                       hwb_StrobeRecv;    /* firmware has RX_STROBE */
+   UWORD                       hwb_NoStrobeRecv;  /* NORXSTROBE */
+   UWORD                       hwb_StrobeFails;   /* in a row */
 
    struct TemplateConfig       hwb_Config;
 };
@@ -60,6 +64,6 @@ struct HWBase
 /* ----- config ----- */
 
 #define CONFIGFILE "ENV:SANA2/plipbox.config"
-#define TEMPLATE "TIMEOUT/K/N,NOBURST/S,RXBURST/S"
+#define TEMPLATE "TIMEOUT/K/N,NOBURST/S,RXBURST/S,NORXSTROBE/S"
 
 #endif

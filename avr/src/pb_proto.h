@@ -53,6 +53,7 @@
 #define PBPROTO_CMD_RECV       0x22   // amiga wants to receive a packet
 #define PBPROTO_CMD_SEND_BURST 0x33
 #define PBPROTO_CMD_RECV_BURST 0x44
+#define PBPROTO_CMD_RECV_STROBE 0x55  // receive, each port B read acknowledged by /STROBE
 
 // line status
 #define PBPROTO_LINE_OFF       0x0

@@ -199,6 +199,15 @@ PAR_TIMED_INLINE void par_low_data_out(u08 d)
   PAR_DATA_HI_PORT = (d & PAR_DATA_HI_MASK) | (PAR_DATA_HI_PIN & ~PAR_DATA_HI_MASK);
 }
 
+/* As par_low_data_out, but merges with the PORT latch, not the pin level.
+ * The strobe receive drives data while /STROBE (PD3/PD2) is low; copying
+ * PIND into PORTD there would switch off the /STROBE pull-up. */
+PAR_TIMED_INLINE void par_low_data_out_latch(u08 d)
+{
+  PAR_DATA_LO_PORT = (d & PAR_DATA_LO_MASK) | (PAR_DATA_LO_PORT & ~PAR_DATA_LO_MASK);
+  PAR_DATA_HI_PORT = (d & PAR_DATA_HI_MASK) | (PAR_DATA_HI_PORT & ~PAR_DATA_HI_MASK);
+}
+
 PAR_TIMED_INLINE u08 par_low_data_in(void)
 {
   u08 d1 = PAR_DATA_LO_PIN & PAR_DATA_LO_MASK;
@@ -215,6 +224,11 @@ PAR_TIMED_INLINE void par_low_data_out(u08 d)
 PAR_TIMED_INLINE u08 par_low_data_in(void)
 {
   return PAR_DATA_PIN;
+}
+
+PAR_TIMED_INLINE void par_low_data_out_latch(u08 d)
+{
+  PAR_DATA_PORT = d;
 }
 #endif
 #endif
@@ -252,6 +266,45 @@ PAR_TIMED_INLINE void par_low_set_busy_hi(void)
 PAR_TIMED_INLINE u08 par_low_get_strobe(void)
 {
   return (PAR_STROBE_PIN & PAR_STROBE_MASK) == PAR_STROBE_MASK;
+}
+
+/* /STROBE edge latch.  The Amiga's CIA-A pulses PC (/STROBE) low for one
+ * E cycle after every access to port B, reads included.  The external
+ * interrupt flag of the /STROBE pin records that falling edge; the
+ * interrupt itself stays masked and the flag is polled. */
+#ifdef HAVE_arduino
+#ifdef HAVE_nano
+#define PAR_STROBE_EICR         EICRA
+#define PAR_STROBE_ISC_MASK     (_BV(ISC11) | _BV(ISC10))
+#define PAR_STROBE_ISC_FALL     _BV(ISC11)
+#define PAR_STROBE_EIFR         EIFR
+#define PAR_STROBE_INTF         INTF1
+#else
+#define PAR_STROBE_EICR         EICRA
+#define PAR_STROBE_ISC_MASK     (_BV(ISC01) | _BV(ISC00))
+#define PAR_STROBE_ISC_FALL     _BV(ISC01)
+#define PAR_STROBE_EIFR         EIFR
+#define PAR_STROBE_INTF         INTF0
+#endif
+#else
+#ifdef HAVE_avrnetio
+#define PAR_STROBE_EICR         MCUCR
+#define PAR_STROBE_ISC_MASK     (_BV(ISC01) | _BV(ISC00))
+#define PAR_STROBE_ISC_FALL     _BV(ISC01)
+#define PAR_STROBE_EIFR         GIFR
+#define PAR_STROBE_INTF         INTF0
+#endif
+#endif
+
+// clear the latch (the flag is cleared by writing one)
+PAR_TIMED_INLINE void par_low_strobe_clear(void)
+{
+  PAR_STROBE_EIFR = _BV(PAR_STROBE_INTF);
+}
+
+PAR_TIMED_INLINE u08 par_low_strobe_seen(void)
+{
+  return (PAR_STROBE_EIFR & _BV(PAR_STROBE_INTF)) != 0;
 }
 
 // SELECT (IN)

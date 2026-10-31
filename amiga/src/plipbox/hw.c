@@ -39,6 +39,16 @@
 #define HW_MAGIC_OFFLINE   0xfffe
 #define HW_MAGIC_LOOPBACK  0xfffd
 #define HW_MAGIC_MCAST_FILTER 0xfffc
+#define HW_MAGIC_CAPS      0xfffb
+
+/* Capabilities (avr/src/bridge.c).  The online magic asks for them in
+ * destination bytes 2 and 3 (bits, complement); firmware that has them
+ * answers with a CAPS magic, bits and complement in destination bytes 0
+ * and 1.  Older firmware does not answer and the receive stays as it was. */
+#define HW_CAP_RX_STROBE   0x01
+
+/* strobe receives failing in a row before the driver stops using it */
+#define HW_STROBE_MAX_FAILS 3
 
 /* externs in asm code */
 GLOBAL VOID ASM interrupt(REG(a1,struct HWBase *hwb));
@@ -47,6 +57,7 @@ GLOBAL BOOL ASM hwsend(REG(a0,struct HWBase *hwb), REG(a1,struct HWFrame *frame)
 GLOBAL BOOL ASM hwrecv(REG(a0,struct HWBase *hwb), REG(a1,struct HWFrame *frame));
 GLOBAL BOOL ASM hwburstsend(REG(a0,struct HWBase *), REG(a1,struct HWFrame *));
 GLOBAL BOOL ASM hwburstrecv(REG(a0,struct HWBase *), REG(a1,struct HWFrame *));
+GLOBAL BOOL ASM hwstroberecv(REG(a0,struct HWBase *), REG(a1,struct HWFrame *));
 
    /* amiga.lib provides these symbols for SAS C and vbcc. With GCC's
       base-relative device build, use explicit absolute MMIO addresses:
@@ -83,6 +94,7 @@ PRIVATE ULONG ASM SAVEDS exceptcode(REG(d0,ULONG sigmask), REG(a1,struct PLIPBas
 /* magic packet to tell plipbox firmware we go online and our MAC */
 static REGARGS BOOL hw_send_magic_pkt(struct PLIPBase *pb, USHORT magic)
 {
+   struct HWBase *hwb = (struct HWBase *)pb->pb_HWBase;
    BOOL rc;
 
    struct HWFrame *frame = pb->pb_Frame;
@@ -93,6 +105,15 @@ static REGARGS BOOL hw_send_magic_pkt(struct PLIPBase *pb, USHORT magic)
    frame->hwf_DstAddr[0] = DEVICE_VERSION;
    frame->hwf_DstAddr[1] = DEVICE_REVISION;
    frame->hwf_Type = magic;
+   if(magic == HW_MAGIC_ONLINE) {
+      /* a new session: the firmware confirms the strobe receive again */
+      hwb->hwb_StrobeRecv = 0;
+      hwb->hwb_StrobeFails = 0;
+      if(!hwb->hwb_NoStrobeRecv) {
+         frame->hwf_DstAddr[2] = HW_CAP_RX_STROBE;
+         frame->hwf_DstAddr[3] = (UBYTE)~HW_CAP_RX_STROBE;
+      }
+   }
    
    rc = hw_send_frame(pb, frame) ? TRUE : FALSE;
    return rc;
@@ -195,6 +216,10 @@ GLOBAL REGARGS void hw_config_update(struct PLIPBase *pb)
     hwb->hwb_BurstMode = 0;
     hwb->hwb_BurstRecv = 0;
   }
+
+  if(args->no_rx_strobe) {
+    hwb->hwb_NoStrobeRecv = 1;
+  }
 }
 
 GLOBAL REGARGS void hw_config_dump(struct PLIPBase *pb)
@@ -205,6 +230,7 @@ GLOBAL REGARGS void hw_config_dump(struct PLIPBase *pb)
   d(("timeOut %ld.%ld\n", hwb->hwb_TimeOutSecs, hwb->hwb_TimeOutMicros));
   d(("burstMode %ld\n", (ULONG)hwb->hwb_BurstMode));
   d(("burstRecv %ld\n", (ULONG)hwb->hwb_BurstRecv));
+  d(("noStrobeRecv %ld\n", (ULONG)hwb->hwb_NoStrobeRecv));
 }
 
 GLOBAL REGARGS BOOL hw_init(struct PLIPBase *pb)
@@ -498,6 +524,17 @@ GLOBAL REGARGS BOOL hw_recv_frame(struct PLIPBase *pb, struct HWFrame *frame)
    if(hwb->hwb_BurstRecv) {
      d8(("+rxb\n"));
      rc = hwburstrecv(hwb, frame);
+   } else if(hwb->hwb_StrobeRecv) {
+     d8(("+rxs\n"));
+     rc = hwstroberecv(hwb, frame);
+     if(rc) {
+       hwb->hwb_StrobeFails = 0;
+     } else if(++hwb->hwb_StrobeFails >= HW_STROBE_MAX_FAILS) {
+       /* e.g. older firmware flashed while online: its online request
+          then arrives with the per-byte handshake */
+       d(("strobe receive failed %ld times, off\n", (ULONG)hwb->hwb_StrobeFails));
+       hwb->hwb_StrobeRecv = 0;
+     }
    } else {
      d8(("+rx\n"));
      rc = hwrecv(hwb, frame);
@@ -534,6 +571,17 @@ GLOBAL REGARGS BOOL hw_recv_frame(struct PLIPBase *pb, struct HWFrame *frame)
    if(pkttyp == HW_MAGIC_LOOPBACK) {
       d(("loop back packet (size %ld)\n",frame->hwf_Size));
       rc = hw_send_frame(pb, frame);
+      frame->hwf_Size = 0;
+   }
+   else if(pkttyp == HW_MAGIC_CAPS) {
+      UBYTE caps = frame->hwf_DstAddr[0];
+      if(frame->hwf_Size == HW_ETH_HDR_SIZE &&
+         (UBYTE)(caps ^ frame->hwf_DstAddr[1]) == 0xff &&
+         (caps & HW_CAP_RX_STROBE) && !hwb->hwb_NoStrobeRecv) {
+         d(("firmware caps %02lx: strobe receive\n", (ULONG)caps));
+         hwb->hwb_StrobeRecv = 1;
+         hwb->hwb_StrobeFails = 0;
+      }
       frame->hwf_Size = 0;
    }
    /* plipbox requests online magic (again) */

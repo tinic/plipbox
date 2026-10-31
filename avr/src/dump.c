@@ -214,6 +214,7 @@ void dump_pb_cmd(const pb_proto_stat_t *ps)
       break;
     case PBPROTO_CMD_RECV:
     case PBPROTO_CMD_RECV_BURST:
+    case PBPROTO_CMD_RECV_STROBE:
       break;
     default:
       is_valid = 0;

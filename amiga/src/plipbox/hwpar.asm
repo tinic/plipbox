@@ -22,6 +22,7 @@
       xdef    _hwrecv
       xdef    _hwburstsend
       xdef    _hwburstrecv
+      xdef    _hwstroberecv
 
 
 ciaa     equ     $bfe001
@@ -721,6 +722,132 @@ bwr_ExitError:
          CLRSELECT a5
 
          move.l   d2,d0                               ; return rc
+         movem.l  (sp)+,d2-d7/a2-a6
+         rts
+
+;----------------------------------------------------------------------------
+;
+; NAME
+;     hwstroberecv() - low level receive routine, /STROBE acknowledged
+;
+; SYNOPSIS
+;     void hwstroberecv(struct HWBase *, struct HWFrame *)
+;                       A0               A1
+;
+; FUNCTION
+;     Receive a packet with CMD_RECV_STROBE (firmware with the RX_STROBE
+;     capability only).  Each read of port B pulses /STROBE (CIA PC) and
+;     the firmware answers it with the next byte and a RAK toggle.  So a
+;     byte costs a RAK poll and the read: no REQ write, no Disable(), and
+;     no assumption on the speed of either side.
+;
+_hwstroberecv:
+         movem.l  d2-d7/a2-a6,-(sp)
+         move.l   a0,a2                               ; a2 = HWBase
+         move.l   a1,a3                               ; a3 = HWFrame
+         moveq    #FALSE,d5                           ; d5 = return value
+         move.l   hwb_SysBase(a2),a6                  ; a6 = SysBase
+         moveq    #HS_REQ_BIT,d3                      ; d3 = HS_REQ
+         moveq    #HS_RAK_BIT,d4                      ; d4 = HS_RAK
+         lea      BaseAX,a5                           ; a5 = ciab+ciapra
+         lea      ciaa+ciaprb,a4                      ; a4 = parallel data
+
+         ; --- prepare
+         ; Wait RAK == 0
+hsr_WaitRak1:
+         btst     d4,(a5)
+         beq.s    hsr_RakOk1
+         tst.b    hwb_TimeoutSet(a2)
+         beq.s    hsr_WaitRak1
+         bra      hsr_ExitError
+hsr_RakOk1:
+         ; [OUT]
+         SETCIAOUTPUT a5
+         ; Set <CMD_RECV_STROBE>
+         move.b   #HWF_CMD_RECV_STROBE,(a4)
+         ; Set SEL = 1 -> trigger Plipbox
+         SETSELECT a5
+
+         ; Wait RAK == 1
+hsr_WaitRak2:
+         btst     d4,(a5)
+         bne.s    hsr_RakOk2
+         tst.b    hwb_TimeoutSet(a2)
+         beq.s    hsr_WaitRak2
+         bra      hsr_ExitError
+hsr_RakOk2:
+         ; [IN], then REQ = 1: the firmware may drive the port now
+         SETCIAINPUT a5
+         bset     d3,(a5)
+
+         ; --- size word: hi on RAK == 0, lo on RAK == 1
+hsr_WaitRak3:
+         btst     d4,(a5)
+         beq.s    hsr_RakOk3
+         tst.b    hwb_TimeoutSet(a2)
+         beq.s    hsr_WaitRak3
+         bra.s    hsr_ExitError
+hsr_RakOk3:
+         move.b   (a4),(a3)+                          ; <Size_Hi>, pulses /STROBE
+hsr_WaitRak4:
+         btst     d4,(a5)
+         bne.s    hsr_RakOk4
+         tst.b    hwb_TimeoutSet(a2)
+         beq.s    hsr_WaitRak4
+         bra.s    hsr_ExitError
+hsr_RakOk4:
+         move.b   (a4),(a3)+                          ; <Size_Lo>
+
+         ; --- check size
+         move.w   -2(a3),d6                           ; = length
+         beq.s    hsr_ExitOk                          ; empty size? ok
+         cmp.w    hwb_MaxFrameSize(a2),d6             ; buffer too large
+         bhi.s    hsr_ExitError
+
+         ; convert to words (-1 for dbra)
+         btst     #0,d6
+         bne.s    hsr_odd
+         subq.w   #1,d6
+hsr_odd:
+         lsr.w    #1,d6
+
+         ; --- data: even bytes on RAK == 0, odd bytes on RAK == 1
+hsr_WaitRak5a:
+         btst     d4,(a5)
+         beq.s    hsr_RakOk5a
+         tst.b    hwb_TimeoutSet(a2)
+         beq.s    hsr_WaitRak5a
+         bra.s    hsr_ExitError
+hsr_RakOk5a:
+         move.b   (a4),(a3)+                          ; <DATA_2n>
+hsr_WaitRak5b:
+         btst     d4,(a5)
+         bne.s    hsr_RakOk5b
+         tst.b    hwb_TimeoutSet(a2)
+         beq.s    hsr_WaitRak5b
+         bra.s    hsr_ExitError
+hsr_RakOk5b:
+         move.b   (a4),(a3)+                          ; <DATA_2n+1>
+         dbra     d6,hsr_WaitRak5a
+
+hsr_ExitOk:
+         moveq    #TRUE,d5
+hsr_ExitError:
+         ; reset signal
+         moveq    #0,d0
+         move.l   hwb_IntSigMask(a2),d1
+         jsr      _LVOSetSignal(a6)
+
+         ; clear RECV_PENDING flag set by irq
+         bclr     #HWB_RECV_PENDING,hwb_Flags(a2)
+
+         ; clear REQ
+         bclr     d3,(a5)
+
+         ; clear SEL
+         CLRSELECT a5
+
+         move.l   d5,d0                               ; return value
          movem.l  (sp)+,d2-d7/a2-a6
          rts
 
