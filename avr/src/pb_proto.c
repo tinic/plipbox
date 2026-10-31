@@ -505,7 +505,12 @@ PAR_TIMED_INLINE u08 strobe_next(u08 d, u08 rak)
 static u08 strobe_last(void)
 {
   while(!par_low_strobe_seen()) {
+    /* The Amiga drops SEL only after its last read; an interrupt between
+     * the latch test and the SEL test must not lose that pulse. */
     if(!GET_SELECT()) {
+      if(par_low_strobe_seen()) {
+        break;
+      }
       return PBPROTO_STATUS_LOST_SELECT | PBPROTO_STAGE_LAST_DATA;
     }
     if(timer_100us >= pb_proto_timeout) {
