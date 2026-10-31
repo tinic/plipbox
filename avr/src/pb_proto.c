@@ -452,6 +452,114 @@ recv_burst_abort:
   return PBPROTO_STATUS_TIMEOUT | PBPROTO_STAGE_DATA;
 }
 
+// ---------- STROBE ----------
+
+/* Receive with every byte acknowledged by the Amiga's read of it.  A read of
+ * CIA-A port B pulses /STROBE low for one E cycle (8520 PC output).  The
+ * firmware drives a byte, toggles RAK, and drives the next byte only after
+ * that pulse.  The Amiga waits for each RAK toggle and reads.  Neither side
+ * assumes the speed of the other: one CIA access plus the RAK poll per byte,
+ * no REQ write, no Disable().
+ *
+ * RAK after the bytes: size hi 0, size lo 1, data 2n 0, data 2n+1 1.  The
+ * last byte leaves RAK at 1 and the end of the command clears it after
+ * SEL = 0, as for the other receive commands. */
+
+// one /STROBE pulse after the byte now on the port; next byte and RAK on it
+PAR_TIMED_INLINE u08 strobe_next(u08 d, u08 rak)
+{
+  // the pulse is latched: an interrupt here only delays the answer
+  while(!par_low_strobe_seen()) {
+    if(!GET_SELECT()) {
+      return PBPROTO_STATUS_LOST_SELECT | PBPROTO_STAGE_DATA;
+    }
+    if(timer_100us >= pb_proto_timeout) {
+      return PBPROTO_STATUS_TIMEOUT | PBPROTO_STAGE_DATA;
+    }
+  }
+
+  cli();
+  par_low_data_out_latch(d);
+  if(rak) {
+    SET_RAK();
+  } else {
+    CLR_RAK();
+  }
+  /* Re-arm only after the pulse has ended and settled, so its rising edge
+   * cannot count as a second read.  The Amiga cannot make the next pulse
+   * sooner: it must see this RAK, read port B, and the CIA pulses PC in the
+   * E cycle after that read, two E cycles (2.8 us) after this one at least. */
+  while(!par_low_get_strobe()) {
+    if(!GET_SELECT()) {
+      sei();
+      return PBPROTO_STATUS_LOST_SELECT | PBPROTO_STAGE_DATA;
+    }
+  }
+  _delay_loop_1(2);
+  par_low_strobe_clear();
+  sei();
+  return PBPROTO_STATUS_OK;
+}
+
+// final pulse: the Amiga has read the last byte
+static u08 strobe_last(void)
+{
+  while(!par_low_strobe_seen()) {
+    if(!GET_SELECT()) {
+      return PBPROTO_STATUS_LOST_SELECT | PBPROTO_STAGE_LAST_DATA;
+    }
+    if(timer_100us >= pb_proto_timeout) {
+      return PBPROTO_STATUS_TIMEOUT | PBPROTO_STAGE_LAST_DATA;
+    }
+  }
+  return PBPROTO_STATUS_OK;
+}
+
+static u08 cmd_recv_strobe(u16 size, u16 *ret_size)
+{
+  // REQ = 1: the Amiga has set its port to input
+  u08 status = wait_req(1, PBPROTO_STAGE_SIZE_HI);
+  if(status != PBPROTO_STATUS_OK) {
+    return status;
+  }
+
+  u16 words = (size + 1) >> 1;
+  u16 got = 0;
+  const u08 *ptr = pb_buf;
+
+  // one timeout for the whole frame, as on the Amiga side
+  timer_100us = 0;
+
+  // the command byte write pulsed /STROBE too
+  par_low_strobe_clear();
+  par_low_data_set_output();
+  par_low_data_out_latch((u08)(size >> 8));
+  CLR_RAK();
+
+  status = strobe_next((u08)(size & 0xff), 1);
+  for(u16 i = 0; (status == PBPROTO_STATUS_OK) && (i < words); i++) {
+    status = strobe_next(*(ptr++), 0);
+    if(status != PBPROTO_STATUS_OK) {
+      break;
+    }
+    got++;
+    status = strobe_next(*(ptr++), 1);
+    if(status != PBPROTO_STATUS_OK) {
+      break;
+    }
+    got++;
+  }
+  if(status == PBPROTO_STATUS_OK) {
+    status = strobe_last();
+  }
+
+  // [IN]
+  par_low_data_set_input();
+
+  *ret_size = got;
+  return status;
+}
+
 u08 pb_proto_handle(void)
 {
   u08 result;
@@ -477,7 +585,8 @@ u08 pb_proto_handle(void)
 
   // fill buffer for recv command
   u16 pkt_size = 0;
-  if((cmd == PBPROTO_CMD_RECV) || (cmd == PBPROTO_CMD_RECV_BURST)) {
+  if((cmd == PBPROTO_CMD_RECV) || (cmd == PBPROTO_CMD_RECV_BURST) ||
+     (cmd == PBPROTO_CMD_RECV_STROBE)) {
     u08 res = fill_func(pb_buf, pb_buf_size, &pkt_size);
     if(res != PBPROTO_STATUS_OK) {
       ps->cmd = cmd;
@@ -509,6 +618,9 @@ u08 pb_proto_handle(void)
       break;
     case PBPROTO_CMD_SEND_BURST:
       result = cmd_send_burst(&ret_size);
+      break;
+    case PBPROTO_CMD_RECV_STROBE:
+      result = cmd_recv_strobe(pkt_size, &ret_size);
       break;
     default:
       result = PBPROTO_STATUS_INVALID_CMD;

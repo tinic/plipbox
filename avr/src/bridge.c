@@ -46,6 +46,18 @@
 #define FLAG_ONLINE         1
 #define FLAG_SEND_MAGIC     2
 #define FLAG_FIRST_TRANSFER 4
+#define FLAG_SEND_CAPS      8
+
+/* Capabilities.  A driver that knows them puts the bits it can use and their
+ * complement in the online magic's destination address bytes 2 and 3 (older
+ * drivers leave both 0).  The firmware answers with a CAPS magic frame:
+ * destination bytes 0 and 1 hold the bits both sides use and their
+ * complement.  Older firmware ignores the request, so the driver stays on
+ * the receive it always used. */
+#define CAP_RX_STROBE       0x01
+#define CAPS_FIRMWARE       CAP_RX_STROBE
+
+static u08 caps;
 
 static u08 flags;
 static u08 req_is_pending;
@@ -87,6 +99,14 @@ static void magic_online(const u08 *buf)
   uart_send_pstring(PSTR("[MAGIC] online\r\n"));
   flags |= FLAG_ONLINE | FLAG_FIRST_TRANSFER;
 
+  const u08 *tgt_mac = buf + ETH_OFF_TGT_MAC;
+  if((u08)(tgt_mac[2] ^ tgt_mac[3]) == 0xff &&
+     (tgt_mac[2] & CAPS_FIRMWARE) != 0) {
+    caps = tgt_mac[2] & CAPS_FIRMWARE;
+    flags |= FLAG_SEND_CAPS;
+    trigger_request();
+  }
+
   /* Each online session starts without memberships. The Amiga driver
    * replays its joined groups after the online handshake when needed. */
   pio_mcast_filter(empty_hash, 0);
@@ -113,7 +133,7 @@ static void magic_offline(void)
   /* A queued Ethernet frame may have pulsed ACK before the Amiga took the
    * unit down. Do not carry that unacknowledged request into the next online
    * session: it otherwise suppresses the new session's first request. */
-  flags &= ~(FLAG_ONLINE | FLAG_SEND_MAGIC | FLAG_FIRST_TRANSFER);
+  flags &= ~(FLAG_ONLINE | FLAG_SEND_MAGIC | FLAG_FIRST_TRANSFER | FLAG_SEND_CAPS);
   req_is_pending = 0;
   buffered_frame = 0;
 }
@@ -164,6 +184,16 @@ static u08 fill_pkt(u08 *buf, u16 max_size, u16 *size)
     net_copy_mac(param.mac_addr, pkt_buf + ETH_OFF_SRC_MAC);
     net_put_word(pkt_buf + ETH_OFF_TYPE, ETH_TYPE_MAGIC_ONLINE);
 
+    *size = ETH_HDR_SIZE;
+  } else if(flags & FLAG_SEND_CAPS) {
+    net_copy_mac(param.mac_addr, pkt_buf + ETH_OFF_SRC_MAC);
+    pkt_buf[ETH_OFF_TGT_MAC + 0] = caps;
+    pkt_buf[ETH_OFF_TGT_MAC + 1] = (u08)~caps;
+    pkt_buf[ETH_OFF_TGT_MAC + 2] = 0;
+    pkt_buf[ETH_OFF_TGT_MAC + 3] = 0;
+    pkt_buf[ETH_OFF_TGT_MAC + 4] = 0;
+    pkt_buf[ETH_OFF_TGT_MAC + 5] = 0;
+    net_put_word(pkt_buf + ETH_OFF_TYPE, ETH_TYPE_MAGIC_CAPS);
     *size = ETH_HDR_SIZE;
   } else {
     /* Keep the frame in pkt_buf until the parallel transfer succeeds.
@@ -251,9 +281,12 @@ u08 bridge_loop(void)
       u08 status = pb_util_handle();
       u08 cmd = pb_proto_stat.cmd;
       if(status == PBPROTO_STATUS_OK &&
-         (cmd == PBPROTO_CMD_RECV || cmd == PBPROTO_CMD_RECV_BURST)) {
+         (cmd == PBPROTO_CMD_RECV || cmd == PBPROTO_CMD_RECV_BURST ||
+          cmd == PBPROTO_CMD_RECV_STROBE)) {
         if(flags & FLAG_SEND_MAGIC) {
           flags &= ~FLAG_SEND_MAGIC;
+        } else if(flags & FLAG_SEND_CAPS) {
+          flags &= ~FLAG_SEND_CAPS;
         } else if(buffered_frame) {
           buffered_frame = 0;
           if(flags & FLAG_FIRST_TRANSFER) {
@@ -263,13 +296,16 @@ u08 bridge_loop(void)
           }
         }
         req_is_pending = 0;
+        // a CAPS frame queued behind the one just taken
+        if(flags & FLAG_SEND_CAPS)
+          trigger_request();
       } else if(cmd == PBPROTO_CMD_SEND || cmd == PBPROTO_CMD_SEND_BURST) {
         /* Both directions share pkt_buf. Even a failed Amiga send may have
          * overwritten a buffered receive, so never replay stale bytes. */
         if(buffered_frame) {
           buffered_frame = 0;
           req_is_pending = 0;
-          if(flags & FLAG_SEND_MAGIC)
+          if(flags & (FLAG_SEND_MAGIC | FLAG_SEND_CAPS))
             trigger_request();
         }
       }
@@ -303,7 +339,7 @@ u08 bridge_loop(void)
 
     /* Retry an unconsumed magic packet too, even when no Ethernet frame is
      * queued. Otherwise a lost first pulse can strand initial handshakes. */
-    if(req_is_pending && ((flags & FLAG_SEND_MAGIC) || buffered_frame))
+    if(req_is_pending && ((flags & (FLAG_SEND_MAGIC | FLAG_SEND_CAPS)) || buffered_frame))
       trigger_request();
 
     // flow control

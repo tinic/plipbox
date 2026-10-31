@@ -33,6 +33,9 @@ void par_low_init(void)
   // /STROBE (IN)
   PAR_STROBE_DDR &= ~PAR_STROBE_MASK;
   PAR_STROBE_PORT |= PAR_STROBE_MASK;
+  // latch falling /STROBE edges in the INTn flag; the interrupt stays masked
+  PAR_STROBE_EICR = (PAR_STROBE_EICR & ~PAR_STROBE_ISC_MASK) | PAR_STROBE_ISC_FALL;
+  par_low_strobe_clear();
   
   // SELECT (IN)
   PAR_SELECT_DDR &= ~PAR_SELECT_MASK;
