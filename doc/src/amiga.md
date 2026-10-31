@@ -209,7 +209,19 @@ The following options are supported:
     - Receives in burst mode too. Burst receive has no per-byte handshake
       and fails when the Amiga's parallel port access is slower than the
       firmware's byte hold time, for example on Emu68/PiStorm. Receive uses
-      the handshaked protocol unless this option is set.
+      the strobe-acknowledged or the handshaked protocol unless this option
+      is set.
+
+  - **NORXSTROBE** (switch /S) (default: strobe receive on)
+    - With firmware that supports it, each read of the parallel data port
+      pulses /STROBE and the firmware takes that pulse as the acknowledgement
+      for the byte. This receive is faster than the handshaked protocol and
+      does not depend on the speed of either side. The driver asks the
+      firmware for it when going online and uses the handshaked protocol
+      with older firmware.
+    - This option turns strobe receive off. Use it on hardware whose CIA does
+      not pulse /STROBE on a read, for example FPGA CIA cores: there the
+      driver drops up to 3 frames before it falls back by itself.
 
   - **TIMEOUT** (numerical key /K/N) (default: 500 * 1000) (unit: microseconds)
     - The parallel transfer uses time outs to detect error conditions.
