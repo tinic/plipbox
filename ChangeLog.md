@@ -1,6 +1,19 @@
 plipbox: ChangeLog
 ==================
 
+unreleased
+----------
+
+- firmware and driver: strobe-acknowledged receive; each read of the data
+  port acknowledges its byte, which raises Amiga receive speed and works at
+  any CPU speed; the driver falls back to the handshaked receive with older
+  firmware, after 3 failed receives, or with NORXSTROBE
+- driver: the server task runs at priority 10 by default, above the TCP/IP
+  stack; PRIORITY still sets it
+- driver: one CIA write per handshake edge on send and receive
+- firmware: a lost-select report no longer repeats a frame the Amiga already
+  received
+
 fork release 0.6.2-multicast (2026-10-28)
 -----------------------------------------
 
